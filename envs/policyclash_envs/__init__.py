@@ -11,11 +11,13 @@ from typing import Callable
 
 from .base import EnvSpec, Observation, Outcome, StepResult, Termination, TwoPlayerEnv
 from .connect4 import Connect4
+from .sap2 import Sap2
 from .tron_duel import TronDuel
 
 REGISTRY: dict[str, Callable[[], TwoPlayerEnv]] = {
     Connect4.spec.qualified_id: Connect4,
     TronDuel.spec.qualified_id: TronDuel,
+    Sap2.spec.qualified_id: Sap2,
 }
 
 
@@ -38,6 +40,7 @@ __all__ = [
     "EnvSpec",
     "Observation",
     "Outcome",
+    "Sap2",
     "StepResult",
     "Termination",
     "TronDuel",
