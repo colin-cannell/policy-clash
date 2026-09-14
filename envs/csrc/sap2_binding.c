@@ -129,6 +129,22 @@ static PyObject *Sap2_replay(Sap2Object *self, PyObject *Py_UNUSED(ignored)) {
     return list;
 }
 
+/* An independent copy of the whole rules core. SAP2 is POD - fixed seat
+ * arrays, a fixed moves array, three uint64_t RNG words, no pointers and
+ * nothing heap-owned - so a struct assignment is a complete, correct deep
+ * copy, and the copy's RNG streams continue from the fork point rather than
+ * restarting. Deliberately clone-only: no set_state counterpart, because
+ * accepting a caller-supplied SAP2 image would mean trusting num_ticks and
+ * the per-seat counts that index these arrays. See base.py's Forkable. */
+static PyObject *Sap2_clone(Sap2Object *self, PyObject *Py_UNUSED(ignored)) {
+    Sap2Object *copy = (Sap2Object *)Py_TYPE(self)->tp_alloc(Py_TYPE(self), 0);
+    if (copy == NULL) {
+        return NULL;
+    }
+    copy->env = self->env;
+    return (PyObject *)copy;
+}
+
 static PyObject *Sap2_get_done(Sap2Object *self, void *closure) {
     (void)closure;
     return PyBool_FromLong(self->env.done);
@@ -147,6 +163,7 @@ static PyMethodDef Sap2_methods[] = {
     {"legal", (PyCFunction)Sap2_legal, METH_O, "SAP2_NUM_ACTIONS bool cells as bytes."},
     {"ended", (PyCFunction)Sap2_ended, METH_O, "Whether this seat has stopped acting this round."},
     {"replay", (PyCFunction)Sap2_replay, METH_NOARGS, "Actions played so far, flat."},
+    {"clone", (PyCFunction)Sap2_clone, METH_NOARGS, "An independent copy of the full state."},
     {NULL, NULL, 0, NULL}};
 
 static PyGetSetDef Sap2_getset[] = {

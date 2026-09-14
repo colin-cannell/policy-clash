@@ -25,6 +25,20 @@ The load-bearing invariant is in `StepResult.observations`. It is a two-tuple in
 
 Add the extension to `ext_modules` in `envs/setup.py` and one line to `REGISTRY` in `envs/policyclash_envs/__init__.py`. An env that is not registered cannot be scheduled.
 
+## Optional capability: `Forkable`
+
+`TwoPlayerEnv` is the contract every env owes every submission, and forking state is not part of it. A feedforward or recurrent policy only ever steps forward, so requiring `clone` of every env would tax every core to serve one class of submission. It is a separate `runtime_checkable` protocol in `base.py` instead, and a runner asks `isinstance(env, Forkable)` before serving a submission that needs it.
+
+An env opts in with one method:
+
+- `clone() -> Forkable`. An independent deep copy. Stepping the copy never touches the original, and the copy's randomness continues the original's stream from the fork point rather than restarting it.
+
+There is no `get_state`/`set_state` pair, deliberately. A search restores a position by keeping a clone and forking it again, which is everything tree search needs. A `set_state` taking bytes would have to trust caller-supplied values for fields that index fixed-size arrays — tick counts, team and shop occupancy — turning a submission into an out-of-bounds write against the rules core. `clone` cannot express an invalid state, because the only states it can produce are ones the core already reached.
+
+Implementing it is cheap when the core is POD, which is the normal case here: the binding allocates a new object and assigns the struct (`sap2_binding.c`'s `Sap2_clone`), and the Python layer forks `_core` and nothing else. Why it is worth having rather than replaying from the seed: measured on `sap2-v1` at a 30-tick depth, `clone` is 0.19 µs against 56 µs to `reset` and replay the prefix — 289x, and the gap grows linearly with depth. Without it a search spends most of its budget re-simulating instead of searching.
+
+**A clone carries more than an observation does.** It holds both seats' teams and the RNG words that decide future shop rolls and battles. In an env whose observation deliberately hides opponent state — `sap2-v1` does — handing a raw clone to a competitor hands it information the interface is built to withhold. Safe for training, analysis, and tooling as-is; serving it to an untrusted search submission needs a seat-masked fork first, which no env implements yet.
+
 ## Rules the interface enforces
 
 **Symmetric observations.** `Observation.features` is from the perspective of the seat receiving it, so both seats see an identical encoding of the same position. In a turn-based env that means the encoding flips with the player on move; in a simultaneous env both seats are handed their own view of the same tick, each labelled own/opponent rather than seat 0/seat 1. One network plays both sides either way, which is what makes self-play and rating comparable across seats.

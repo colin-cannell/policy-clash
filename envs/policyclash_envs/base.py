@@ -127,3 +127,36 @@ class TwoPlayerEnv(Protocol):
         the spec it already had to load. Enough to reconstruct the episode
         given the seed and the env version.
         """
+
+
+@runtime_checkable
+class Forkable(Protocol):
+    """Optional capability: fork the env's state so a search can explore.
+
+    Deliberately NOT part of `TwoPlayerEnv`. A feedforward or recurrent policy
+    steps forward and never needs this, so requiring it of every env would tax
+    every implementation to serve one class of submission. An env opts in by
+    implementing `clone`, and a runner detects it with `isinstance(env,
+    Forkable)`.
+
+    `clone` is the whole capability. There is no `set_state`/`get_state` pair,
+    for two reasons. A search restores a position by keeping a clone of it and
+    forking that clone again, which is all tree search ever needs. And a
+    `set_state` taking bytes would have to trust externally supplied values for
+    fields that index fixed-size arrays - tick counts, team and shop
+    occupancy - which turns a submission into an out-of-bounds write against
+    the rules core. `clone` cannot express an invalid state, because the only
+    states it can produce are ones the core already reached itself.
+
+    WARNING - a clone carries the FULL state, including both seats' teams and
+    the RNG streams that decide future shop rolls and battles. That is strictly
+    more than either seat's observation shows. A clone is therefore safe to
+    hand to training and analysis tooling, and is NOT safe to hand to a
+    competitor as-is in an env whose observation hides opponent state; see
+    docs/envs/sap-v2.md's note on this.
+    """
+
+    def clone(self) -> Forkable:
+        """An independent deep copy. Stepping the copy never affects the
+        original, and the copy's future randomness continues the original's
+        stream from the fork point rather than restarting it."""

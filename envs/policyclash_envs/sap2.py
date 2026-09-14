@@ -107,6 +107,24 @@ class Sap2:
     def replay(self) -> list[int]:
         return self._core.replay()
 
+    def clone(self) -> Sap2:
+        """An independent copy of the match, satisfying `base.Forkable`.
+
+        Present so a search-based submission can explore without replaying
+        from the seed at every node - the alternative costs O(depth) per
+        expansion, which is most of a search's budget in a match that runs to
+        MAX_ROUNDS * SHOP_ACTION_BUDGET ticks.
+
+        This module holds no state of its own beyond `_core`, so forking the
+        core is the entire copy; `object.__new__` skips `__init__` only to
+        avoid allocating a core that would be thrown away. Note the clone
+        exposes both seats' state and the RNG streams - see `base.Forkable`'s
+        warning about handing one to a competitor rather than to tooling.
+        """
+        copy = object.__new__(type(self))
+        copy._core = self._core.clone()
+        return copy
+
     @property
     def turn(self) -> int:
         """Current turn number (1-indexed). Not part of the TwoPlayerEnv

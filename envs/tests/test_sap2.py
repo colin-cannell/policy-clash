@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from policyclash_envs import Outcome, Termination, make
+from policyclash_envs.base import Forkable
 from policyclash_envs.sap2 import (
     MAX_ROUNDS,
     MAX_TICKS,
@@ -276,3 +277,42 @@ def test_replay_is_flat_two_per_tick(env):
     replay = env.replay()
     assert replay == [END_TURN, REROLL]
     assert len(replay) == 2
+
+
+def test_env_advertises_the_forkable_capability(env):
+    # How a runner decides whether a search-based submission can be served
+    # at all. sap2 opts in; Forkable is not part of TwoPlayerEnv, so this is
+    # a real capability check and not a tautology about the base interface.
+    assert isinstance(env, Forkable)
+
+
+def test_clone_does_not_affect_the_original(env):
+    result = env.reset(seed=7)
+    result = end_one_round(env, result)
+    turn_at_fork = env.turn
+
+    fork = env.clone()
+    end_both(fork, fork.step(END_TURN, END_TURN))
+
+    # The fork played the match out to its end. The original is still sitting
+    # exactly where it was forked, which is the whole point of the capability.
+    assert env.turn == turn_at_fork
+    assert not result.done
+
+
+def test_clone_continues_the_rng_stream_rather_than_restarting_it(env):
+    # A clone that re-seeded, or that shared shop/battle RNG words with its
+    # source, would make a search's rollouts disagree with what the real match
+    # goes on to do - the failure that makes forking worthless. Same state and
+    # same actions must therefore produce the same match.
+    result = env.reset(seed=11)
+    result = end_one_round(env, result)
+
+    fork = env.clone()
+    fork_result = end_both(fork, fork.step(END_TURN, END_TURN))
+    real_result = end_both(env, env.step(END_TURN, END_TURN))
+
+    assert fork_result.outcome == real_result.outcome
+    assert fork_result.termination == real_result.termination
+    assert fork.replay() == env.replay()
+    assert fork.turn == env.turn
