@@ -473,12 +473,17 @@ static inline void sap2_fire_friend_summoned(SapSeat2 *s, int slot) {
  * 3/3 exp1 L1, 4/4 exp2 L2, ... 7/7 exp5 L3. Callers refuse the stack
  * once exp is SAP2_MAX_EXP, so xp never runs past it.
  *
- * Both formulas run on the PERMANENT components: the survivor is the
- * same body it was a moment ago, so it keeps its own temporary buff,
- * and the absorbed copy's goes with the body it was written on. The
- * oracle was never driven through a stack onto a Horse-buffed pet, so
- * that split is a reading of "the buff belongs to the pet", not a
- * measurement.
+ * The permanent components stack as above; the TEMPORARY components take
+ * the higher of the two, with no +1. Measured from the shipped build via
+ * policy-clash-re-tools against `IntegerStat.Permanent`/`.Temporary`, with
+ * an Ant and a Horse so nothing is random - merging pos1 onto pos0 gives
+ * (perm 3, temp 1) whichever copy carried Horse's buff, and (3, 1) when
+ * both did. sap2 used to keep only the survivor's temporary component,
+ * which silently dropped the buff when the absorbed copy was the buffed
+ * one. Only a team-to-team merge can show this on this roster: a shop copy
+ * always arrives with no temporary component. Horse buffs attack only, so
+ * the same rule for temporary HEALTH is an extension of the measured one,
+ * not itself measured.
  *
  * The perk survives from either copy - Honey fed to a pet and then
  * merged into its twin keeps the Bee. With one perk that is an OR; the
@@ -493,6 +498,10 @@ static inline void sap2_stack_onto(SapSeat2 *s, int target, const SapPet2 *incom
 
     a->attack = (int8_t)((a->attack > incoming->attack ? a->attack : incoming->attack) + 1);
     a->health = (int8_t)((a->health > incoming->health ? a->health : incoming->health) + 1);
+    a->temp_attack = a->temp_attack > incoming->temp_attack ? a->temp_attack
+                                                            : incoming->temp_attack;
+    a->temp_health = a->temp_health > incoming->temp_health ? a->temp_health
+                                                           : incoming->temp_health;
     sap2_clamp_stats(a);
     unsigned exp = (unsigned)a->xp + (unsigned)incoming->xp + 1u;
     if (exp > SAP2_MAX_EXP) {
@@ -691,13 +700,12 @@ static inline void sap2_sell(SapSeat2 *s, int slot) {
          * them buyable. SAP2_FOOD_SLOTS is sized for the worst case, so the
          * prepend below can never push a real item off the end.
          *
-         * OPEN: the crumbs come in UNFROZEN on a turn-1 board and FROZEN on
-         * a turn-5 board, measured both ways, and the effect definition
-         * (EffectAddShopSpell) carries no freeze flag - so something about
-         * the shop state decides it and has not been pinned down yet. sap2
-         * stocks them unfrozen, matching the turn-1 reading; a crumb that
-         * the player freezes by hand then behaves like any other frozen
-         * item. See docs/envs/sap-v2.md. */
+         * The crumbs come in UNFROZEN. A reading that said otherwise on a
+         * turn>=2 board was an artifact of the oracle, not the game: the
+         * flag keys off BoardModel.TurnOver, and the harness's faked
+         * Ready->PreBuild handoff left TurnOver set. With it cleared the
+         * crumbs are unfrozen at every turn and tier. A crumb the player
+         * freezes by hand behaves like any other frozen item. */
         const int n = sold.level;
         for (int f = SAP2_FOOD_SLOTS - 1; f >= n; f--) {
             s->shop_food[f] = s->shop_food[f - n];

@@ -431,6 +431,53 @@ def test_a_stack_keeps_the_honey_perk_from_the_absorbed_copy(env):
     pytest.fail("no seed in 400 offered a duplicate species and Honey in the same turn-1 shop")
 
 
+def test_a_stack_keeps_a_temporary_buff_from_either_copy(env):
+    """Measured against `IntegerStat.Permanent`/`.Temporary` in the shipped
+    build: a merge stacks the permanent components (higher of each, +1) and
+    takes the HIGHER of the two temporary components with no +1 - so the
+    buff survives whichever copy carried it. sap2 used to keep only the
+    survivor's, dropping Horse's buff when the absorbed copy was the buffed
+    one. Here the absorbed copy is the buffed one: the Horse is bought
+    last, so only the twin bought after it is buffed."""
+    for seed in range(400):
+        probe = make(ENV_ID)
+        result = probe.reset(seed=seed)
+        f = result.observations[0].features
+        species = [shop_pet_species(f, s) for s in range(3)]
+        horse = next((s for s in range(3) if species[s] == HORSE_SPECIES), None)
+        pair = next(
+            (
+                (i, j)
+                for i in range(3)
+                for j in range(i + 1, 3)
+                if species[i] == species[j] and species[i] != HORSE_SPECIES
+            ),
+            None,
+        )
+        if horse is None or pair is None:
+            continue
+        i, j = pair
+        result = probe.step(buy(i, 0), END_TURN)  # the unbuffed twin
+        seat1 = IGNORED if result.observations[1] is None else END_TURN
+        result = probe.step(buy(horse, 4), seat1)
+        result = probe.step(buy(j, 1), seat1)  # bought with the Horse present
+        f = result.observations[0].features
+        buffed = team_attack(f, 1)
+        plain = team_attack(f, 0)
+        assert buffed == plain + 1, "Horse buffed the pet bought after it"
+
+        result = probe.step(COMBINE_BASE + 0, seat1)  # absorbs slot 1 into slot 0
+        f = result.observations[0].features
+        # permanent max(2,2)+1 = 3, plus the absorbed copy's temporary +1.
+        assert team_attack(f, 0) == plain + 2
+        # And it is still temporary: it goes away when the next turn starts.
+        result = end_one_round(probe, result)
+        if result.observations[0] is not None:
+            assert team_attack(result.observations[0].features, 0) == plain + 1
+        return
+    pytest.fail("no seed in 400 offered a Horse and a duplicate pair in the turn-1 shop")
+
+
 def test_pigeon_stocks_free_bread_crumbs_without_evicting_food(env):
     """Measured: selling a Pigeon prepends `level` free Bread Crumbs to the
     food shop and leaves the rolled food where it is (pushed right), which
@@ -458,11 +505,11 @@ def test_pigeon_stocks_free_bread_crumbs_without_evicting_food(env):
 
 
 def test_pigeon_crumbs_are_unfrozen_and_a_roll_clears_them(env):
-    """Measured on a turn-1 board: the crumbs a Pigeon stocks come in
-    UNFROZEN, so the next roll clears them along with any other unfrozen
-    stock past the rolled capacity. (On a turn-5 board the same sell
-    produced frozen crumbs - that inconsistency is an open question, see
-    docs/envs/sap-v2.md; sap2 follows the turn-1 reading.)"""
+    """Measured: the crumbs a Pigeon stocks come in UNFROZEN, so the next
+    roll clears them along with any other unfrozen stock past the rolled
+    capacity. A reading that said otherwise on a turn>=2 board turned out
+    to be the oracle sitting with BoardModel.TurnOver still set - see
+    docs/envs/sap-v2.md."""
     for seed in range(200):
         probe = make(ENV_ID)
         result = probe.reset(seed=seed)
