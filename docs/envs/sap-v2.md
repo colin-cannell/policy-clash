@@ -432,17 +432,25 @@ fires once per seat when `sap2_resolve_round` rolls the next round's
 shop), `EndTurn`-conditional-on-a-loss (Snail, new, fires in `sap2_apply`
 when a seat's own shop turn ends).
 
-**Deferred, not silently wrong** — two abilities, called out in
-`sap2_battle_resolve_faint`'s own comments, not just here:
+**Hedgehog's Faint damage needed a real engine feature, not a species
+case** — 2/4/6 (by level) to every OTHER pet, both sides, confirmed via a
+controlled 1v1 through `policy-clash-re-tools`' `battle.py`. The hard part
+was never the damage formula: the splash can faint pets anywhere on
+either board, not just the front position `sap2_battle`'s loop otherwise
+ever resolves, and those faints need their own on-Faint resolution -
+possibly cascading into another Hedgehog. `sap2_battle_resolve_pending_
+faints` is the fix: a sweep, run after every front-line resolution, that
+finds anyone left at ≤0 health anywhere and resolves them through the
+same `sap2_battle_resolve_faint` every other faint goes through. Checked
+against a scripted cascade - a Hedgehog and an Ant vs. a tanky Ant and a
+1-health Ant, where the splash kills the low-health Ant, whose OWN Faint
+ability then buffs the survivor - both `policy-clash-re-tools`' live
+`battle.py` oracle and `sap2_battle` itself (via `sap2_probe.c`, called
+directly, not through the duplicated `battle_ex` driver) agree exactly:
+survivor 6/48.
 
-- **Hedgehog's Faint damage** (2/4/6 to every pet, both sides — the
-  amount confirmed via a controlled 1v1 through `policy-clash-re-tools`'
-  `battle.py`). The blocker isn't the damage formula, it's that the
-  splash can faint pets anywhere on either board, and those faints need
-  their own on-Faint resolution (possibly cascading into another
-  Hedgehog) — every current call site into the Faint resolver assumes
-  index 0. Needs a real "resolve every pet at ≤0 health, anywhere,
-  recursively" pass before it can be added safely.
+**Deferred, not silently wrong**:
+
 - **Spider's Faint summon** (a random Tier-3 pet at 2/2, 4/4 or 6/6):
   there is no Tier-3 roster to summon from yet. Lands with Tier 3.
 
@@ -475,16 +483,31 @@ against this exact change to confirm nothing about Tier 1 regressed.
    policy-clash-re-tools' differential suites).
 2. **Tier 2 — done**, see "Tier 2 roster" above. Snail, Crab, Swan, Rat,
    Hedgehog, Peacock, Flamingo, Worm, Kangaroo, Spider, plus Meat Bone/
-   Muffin/Sleeping Pill and Worm's Apple-Discount/Apple2/Apple3. Hedgehog
-   and Spider's own battle-phase abilities are explicit deferred no-ops,
+   Muffin/Sleeping Pill and Worm's Apple-Discount/Apple2/Apple3. Spider's
+   own battle-phase ability is an explicit deferred no-op,
    not shipped wrong. Introduced `Attack`, `Hurt`, `StartTurn` and
    `EndTurn`-conditional, none of which `sap-v1`'s taxonomy had.
-3. **Tier 3** (Dodo, Badger, Dolphin, Giraffe, Elephant, Camel, Rabbit,
-   Ox, Dog, Sheep + Cake\*, Salad Bowl, Garlic): introduces
+3. **Tier 3** — roster confirmed via `policy-clash-re-tools` directly
+   (`roster.py`'s dump, same method as Tier 2, not `data/turtle_pack`'s
+   wiki scrape): Dodo, Badger, Dolphin, Giraffe, Elephant, Camel, Rabbit,
+   Ox, Dog, Sheep + Birthday Cake, Salad Bowl, Garlic. **This build's
+   Turtle Pack Tier 3 DOES include Birthday Cake** - contradicting this
+   doc's own earlier note (below, now wrong and left crossed out rather
+   than silently deleted) that it was scraped as absent; that scrape was
+   evidently stale or wiki-sourced rather than measured. ~~Cake is
+   confirmed not currently in Turtle Pack per `data/turtle_pack`'s own
+   scrape notes — Salad Bowl and Garlic only.~~ Not started: needs a
+   general recursive "damage arbitrary positions, resolve what that
+   kills" primitive of its own (Badger's Faint ability hits BOTH the
+   friend behind it and whatever is currently on the opposing front line,
+   for 50/100/150% of Badger's own attack - the same class of problem
+   Hedgehog's Faint damage was, and `sap2_battle_resolve_pending_faints`
+   should cover it, but this has not been tried). Introduces
    `FriendAheadFaints`/`FriendAheadAttacks`-style positional triggers
-   (Camel, Giraffe, Ox) not in `sap-v1`'s taxonomy at all yet. \*Cake is
-   confirmed **not** currently in Turtle Pack per `data/turtle_pack`'s own
-   scrape notes — Salad Bowl and Garlic only.
+   (Camel, Giraffe, Ox) not in `sap-v1`'s taxonomy at all yet, and at
+   least one perk beyond Honey/Meat Bone (Garlic's, and Birthday Cake's -
+   neither one's actual mechanic has been looked up yet, only that both
+   are `EffectGivePerk`).
 4. **Tier 4** (Skunk, Hippo, Bison, Blowfish, Turtle, Squirrel, Penguin,
    Deer, Whale, Parrot + Pear, Canned Food, Bread): introduces `KnockOut`
    (Hippo) and permanent shop-wide buffs (Canned Food).
