@@ -221,6 +221,27 @@ PyMODINIT_FUNC PyInit__sap2(void) {
         PyModule_AddIntConstant(module, "TEAM_SLOTS", SAP2_TEAM) < 0 ||
         PyModule_AddIntConstant(module, "MAX_SHOP_PETS", SAP2_MAX_SHOP_PETS) < 0 ||
         PyModule_AddIntConstant(module, "MAX_SHOP_FOOD", SAP2_MAX_SHOP_FOOD) < 0 ||
+        PyModule_AddIntConstant(module, "FOOD_SLOTS", SAP2_FOOD_SLOTS) < 0 ||
+        /* Slot widths and action bases, so that layout-aware consumers
+         * (tests, the visualizer, bots) can derive offsets instead of
+         * hardcoding them and drifting when a block widens. */
+        PyModule_AddIntConstant(module, "TEAM_SLOT_FLOATS", SAP2_TEAM_SLOT_FLOATS) < 0 ||
+        PyModule_AddIntConstant(module, "SHOP_PET_SLOT_FLOATS", SAP2_SHOP_PET_SLOT_FLOATS) < 0 ||
+        PyModule_AddIntConstant(module, "SHOP_FOOD_SLOT_FLOATS", SAP2_SHOP_FOOD_SLOT_FLOATS) < 0 ||
+        PyModule_AddIntConstant(module, "ACT_BUY_PET_BASE", SAP2_ACT_BUY_PET_BASE) < 0 ||
+        PyModule_AddIntConstant(module, "ACT_SELL_BASE", SAP2_ACT_SELL_BASE) < 0 ||
+        PyModule_AddIntConstant(module, "ACT_COMBINE_BASE", SAP2_ACT_COMBINE_BASE) < 0 ||
+        PyModule_AddIntConstant(module, "ACT_REROLL", SAP2_ACT_REROLL) < 0 ||
+        PyModule_AddIntConstant(module, "ACT_REPOSITION_BASE", SAP2_ACT_REPOSITION_BASE) < 0 ||
+        PyModule_AddIntConstant(module, "ACT_BUY_FOOD_BASE", SAP2_ACT_BUY_FOOD_BASE) < 0 ||
+        PyModule_AddIntConstant(module, "ACT_FREEZE_PET_BASE", SAP2_ACT_FREEZE_PET_BASE) < 0 ||
+        PyModule_AddIntConstant(module, "ACT_FREEZE_FOOD_BASE", SAP2_ACT_FREEZE_FOOD_BASE) < 0 ||
+        PyModule_AddIntConstant(module, "MAX_LEVEL", SAP2_MAX_LEVEL) < 0 ||
+        PyModule_AddIntConstant(module, "MAX_EXP", SAP2_MAX_EXP) < 0 ||
+        PyModule_AddIntConstant(module, "MAX_STATS", SAP2_MAX_STATS) < 0 ||
+        PyModule_AddIntConstant(module, "NUM_PERKS", SAP2_NUM_PERKS) < 0 ||
+        PyModule_AddIntConstant(module, "PERK_NONE", SAP2_PERK_NONE) < 0 ||
+        PyModule_AddIntConstant(module, "PERK_HONEY", SAP2_PERK_HONEY) < 0 ||
         PyModule_AddIntConstant(module, "STARTING_GOLD", SAP2_STARTING_GOLD) < 0 ||
         PyModule_AddIntConstant(module, "STARTING_LIVES", SAP2_STARTING_LIVES) < 0 ||
         PyModule_AddIntConstant(module, "TROPHIES_TO_WIN", SAP2_TROPHIES_TO_WIN) < 0 ||

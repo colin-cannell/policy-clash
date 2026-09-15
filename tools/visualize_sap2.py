@@ -58,14 +58,37 @@ from rich.text import Text
 ENV_ID = "sap2-v1"
 
 # ---- decoding the observation buffer back into something renderable ----
-# Layout mirrors sap2.h / envs/tests/test_sap2.py exactly - see
-# docs/envs/sap-v2.md "Observation changes" for the field-by-field spec.
+# Offsets come from the env, not from a copy of the layout: the blocks have
+# widened twice while matching the shipped game (see docs/envs/sap-v2.md
+# "Observation changes"), and a stale constant here would silently render
+# the wrong numbers.
+from policyclash_envs.sap2 import (  # noqa: E402 - after the rich imports on purpose
+    ACT_BUY_FOOD_BASE,
+    ACT_BUY_PET_BASE,
+    ACT_COMBINE_BASE,
+    ACT_FREEZE_FOOD_BASE,
+    ACT_FREEZE_PET_BASE,
+    ACT_REPOSITION_BASE,
+    ACT_REROLL,
+    ACT_SELL_BASE,
+    FOOD_SLOTS,
+    MAX_SHOP_PETS,
+    NUM_ACTIONS,
+    PERK_HONEY,
+    PERK_NONE,
+    SHOP_FOOD_SLOT_FLOATS,
+    SHOP_PET_SLOT_FLOATS,
+    TEAM_SLOT_FLOATS,
+    TEAM_SLOTS,
+)
+
 TEAM_BASE = 4  # after gold(1) lives(1) trophies(1) turn(1)
-TEAM_SLOT_WIDTH = 19
-SHOP_PET_BASE = TEAM_BASE + 5 * TEAM_SLOT_WIDTH
-SHOP_PET_SLOT_WIDTH = 13
-SHOP_FOOD_BASE = SHOP_PET_BASE + 5 * SHOP_PET_SLOT_WIDTH
-SHOP_FOOD_SLOT_WIDTH = 5
+# 13 species one-hot, attack, health, 3 level one-hot, exp, perk one-hot.
+TEAM_SLOT_WIDTH = TEAM_SLOT_FLOATS
+SHOP_PET_BASE = TEAM_BASE + TEAM_SLOTS * TEAM_SLOT_WIDTH
+SHOP_PET_SLOT_WIDTH = SHOP_PET_SLOT_FLOATS
+SHOP_FOOD_BASE = SHOP_PET_BASE + MAX_SHOP_PETS * SHOP_PET_SLOT_WIDTH
+SHOP_FOOD_SLOT_WIDTH = SHOP_FOOD_SLOT_FLOATS
 
 SPECIES_NAME = {
     0: "-", 1: "Ant", 2: "Beaver", 3: "Cricket", 4: "Duck", 5: "Fish",
@@ -83,38 +106,40 @@ PAIRS = [(i, j) for i in range(5) for j in range(i + 1, 5)]
 
 
 def shop_size(turn: int) -> tuple[int, int]:
-    """Same table as sap2.h's sap2_shop_size - see docs/envs/sap-v2.md for
-    why the exact numbers are a documented default, not a pinned source."""
-    if turn <= 2:
-        return 3, 1
+    """Same table as sap2.h's sap2_shop_size - capacity by shop tier, with
+    the tier schedule [3, 5, 7, 9, 11] measured out of the shipped build by
+    policy-clash-re-tools."""
     if turn <= 4:
-        return 4, 1
+        return 3, 1
+    if turn <= 8:
+        return 4, 2
     return 5, 2
 
 
 def decode_action(a: int) -> str:
     """Inverse of sap2.h's action layout - for printing what a seat did."""
-    if a == 0:
+    if a == ACT_BUY_PET_BASE - 1:
         return "END_TURN"
-    if 1 <= a < 6:
-        return f"buy shop-pet {a - 1}"
-    if 6 <= a < 11:
-        return f"sell team {a - 6}"
-    if 11 <= a < 21:
-        i, j = PAIRS[a - 11]
+    if ACT_BUY_PET_BASE <= a < ACT_SELL_BASE:
+        off = a - ACT_BUY_PET_BASE
+        return f"buy shop-pet {off // TEAM_SLOTS} -> team {off % TEAM_SLOTS}"
+    if ACT_SELL_BASE <= a < ACT_COMBINE_BASE:
+        return f"sell team {a - ACT_SELL_BASE}"
+    if ACT_COMBINE_BASE <= a < ACT_REROLL:
+        i, j = PAIRS[a - ACT_COMBINE_BASE]
         return f"combine team {i}+{j}"
-    if a == 21:
+    if a == ACT_REROLL:
         return "reroll"
-    if 22 <= a < 32:
-        i, j = PAIRS[a - 22]
+    if ACT_REPOSITION_BASE <= a < ACT_BUY_FOOD_BASE:
+        i, j = PAIRS[a - ACT_REPOSITION_BASE]
         return f"reposition team {i}<->{j}"
-    if 32 <= a < 42:
-        off = a - 32
-        return f"feed food {off // 5} -> team {off % 5}"
-    if 42 <= a < 47:
-        return f"freeze shop-pet {a - 42}"
-    if 47 <= a < 49:
-        return f"freeze food {a - 47}"
+    if ACT_BUY_FOOD_BASE <= a < ACT_FREEZE_PET_BASE:
+        off = a - ACT_BUY_FOOD_BASE
+        return f"feed food {off // TEAM_SLOTS} -> team {off % TEAM_SLOTS}"
+    if ACT_FREEZE_PET_BASE <= a < ACT_FREEZE_FOOD_BASE:
+        return f"freeze shop-pet {a - ACT_FREEZE_PET_BASE}"
+    if ACT_FREEZE_FOOD_BASE <= a < NUM_ACTIONS:
+        return f"freeze food {a - ACT_FREEZE_FOOD_BASE}"
     return f"illegal({a})"
 
 
@@ -127,10 +152,14 @@ def decode_team(f: np.ndarray) -> list[dict]:
         out.append(
             {
                 "species": species,
+                # atk/hp are the totals sap2.h's accessors report, so a
+                # Horse buff that expires next turn shows here while it
+                # is live - same number the game's card shows.
                 "atk": int(f[base + 13]),
                 "hp": int(f[base + 14]),
                 "level": level,
-                "honey": bool(f[base + 18]),
+                "exp": int(f[base + 18]),
+                "perk": int(np.argmax(f[base + 19 : base + 21])) if species else PERK_NONE,
             }
         )
     return out
@@ -152,14 +181,19 @@ def decode_shop_pets(f: np.ndarray, pet_slots: int) -> list[dict]:
 
 
 def decode_shop_food(f: np.ndarray, food_slots: int) -> list[dict]:
+    """Every food slot, not just the rolled ones: Pigeon's sell prepends
+    free Bread Crumbs past the rolled capacity, so a slot outside it can
+    still hold real, buyable stock (see sap2.h's SAP2_FOOD_SLOTS). Only
+    the occupied ones are rendered."""
     out = []
-    for k in range(2):
+    for k in range(FOOD_SLOTS):
         base = SHOP_FOOD_BASE + k * SHOP_FOOD_SLOT_WIDTH
+        species = int(np.argmax(f[base : base + 4]))
         out.append(
             {
-                "species": int(np.argmax(f[base : base + 4])),
+                "species": species,
                 "frozen": bool(f[base + 4]),
-                "active": k < food_slots,
+                "active": k < food_slots or species != 0,
             }
         )
     return out
@@ -206,7 +240,8 @@ def pet_line(p: dict) -> Text:
     t.append(f"Lv{p['level']} ", style="dim")
     t.append(f"⚔{p['atk']:<3}", style="red")
     t.append(f"❤{p['hp']:<3}", style="green")
-    if p["honey"]:
+    t.append(f"xp{p['exp']} ", style="dim")  # the card's exp pips
+    if p["perk"] == PERK_HONEY:
         t.append(" 🍯")
     return t
 

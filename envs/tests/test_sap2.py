@@ -6,33 +6,71 @@ import pytest
 from policyclash_envs import Outcome, Termination, make
 from policyclash_envs.base import Forkable
 from policyclash_envs.sap2 import (
+    ACT_BUY_FOOD_BASE,
+    ACT_BUY_PET_BASE,
+    ACT_COMBINE_BASE,
+    ACT_FREEZE_FOOD_BASE,
+    ACT_FREEZE_PET_BASE,
+    ACT_REPOSITION_BASE,
+    ACT_REROLL,
+    ACT_SELL_BASE,
+    FOOD_SLOTS,
+    MAX_LEVEL,
     MAX_ROUNDS,
+    MAX_SHOP_PETS,
     MAX_TICKS,
     NUM_ACTIONS,
+    NUM_PERKS,
     OBS_FLOATS,
+    PERK_HONEY,
+    PERK_NONE,
+    SHOP_FOOD_SLOT_FLOATS,
+    SHOP_PET_SLOT_FLOATS,
     STARTING_GOLD,
     STARTING_LIVES,
+    TEAM_SLOT_FLOATS,
+    TEAM_SLOTS,
     TROPHIES_TO_WIN,
 )
 
+HORSE_SPECIES = 6         # sap2.h's species ids, Tier-1 Pack1 roster
+PIGEON_SPECIES = 10
+HONEY_FOOD = 2            # SAP2_HONEY
+BREAD_CRUMBS_FOOD = 3     # SAP2_BREAD_CRUMBS
+
 ENV_ID = "sap2-v1"
 
+# Every offset below comes from the env, not from a copy of the layout:
+# blocks have widened twice while matching the shipped game, and a stale
+# constant here shows up as a nonsense test failure rather than as a
+# layout error.
 END_TURN = 0
-BUY_PET_BASE = 1       # +0..4
-SELL_BASE = 6          # +0..4
-COMBINE_BASE = 11      # +0..9
-REROLL = 21
-REPOSITION_BASE = 22   # +0..9
-BUY_FOOD_BASE = 32     # +0..9 (food_slot*5 + team_target)
-FREEZE_PET_BASE = 42   # +0..4
-FREEZE_FOOD_BASE = 47  # +0..1
+BUY_PET_BASE = ACT_BUY_PET_BASE
+SELL_BASE = ACT_SELL_BASE
+COMBINE_BASE = ACT_COMBINE_BASE
+REROLL = ACT_REROLL
+REPOSITION_BASE = ACT_REPOSITION_BASE
+BUY_FOOD_BASE = ACT_BUY_FOOD_BASE
+FREEZE_PET_BASE = ACT_FREEZE_PET_BASE
+FREEZE_FOOD_BASE = ACT_FREEZE_FOOD_BASE
+
+
+def buy(shop_slot: int, position: int) -> int:
+    """The real game's buy carries the position you dropped the pet on."""
+    return BUY_PET_BASE + shop_slot * TEAM_SLOTS + position
+
+
+def buy_food(food_slot: int, target: int) -> int:
+    return BUY_FOOD_BASE + food_slot * TEAM_SLOTS + target
+
 
 TEAM_BASE = 4  # after gold(1) lives(1) trophies(1) turn(1)
-TEAM_SLOT_WIDTH = 19
-SHOP_PET_BASE = TEAM_BASE + 5 * TEAM_SLOT_WIDTH
-SHOP_PET_SLOT_WIDTH = 13
-SHOP_FOOD_BASE = SHOP_PET_BASE + 5 * SHOP_PET_SLOT_WIDTH
-SHOP_FOOD_SLOT_WIDTH = 5
+# 13 species one-hot, attack, health, 3 level one-hot, exp, perk one-hot.
+TEAM_SLOT_WIDTH = TEAM_SLOT_FLOATS
+SHOP_PET_BASE = TEAM_BASE + TEAM_SLOTS * TEAM_SLOT_WIDTH
+SHOP_PET_SLOT_WIDTH = SHOP_PET_SLOT_FLOATS
+SHOP_FOOD_BASE = SHOP_PET_BASE + MAX_SHOP_PETS * SHOP_PET_SLOT_WIDTH
+SHOP_FOOD_SLOT_WIDTH = SHOP_FOOD_SLOT_FLOATS
 
 IGNORED = NUM_ACTIONS + 99
 
@@ -45,6 +83,28 @@ def env():
 def team_species(f: np.ndarray, slot: int) -> int:
     base = TEAM_BASE + slot * TEAM_SLOT_WIDTH
     return int(np.argmax(f[base : base + 13]))
+
+
+def team_attack(f: np.ndarray, slot: int) -> float:
+    return f[TEAM_BASE + slot * TEAM_SLOT_WIDTH + 13]
+
+
+def team_health(f: np.ndarray, slot: int) -> float:
+    return f[TEAM_BASE + slot * TEAM_SLOT_WIDTH + 14]
+
+
+def team_level(f: np.ndarray, slot: int) -> int:
+    base = TEAM_BASE + slot * TEAM_SLOT_WIDTH + 15
+    return int(np.argmax(f[base : base + MAX_LEVEL])) + 1
+
+
+def team_exp(f: np.ndarray, slot: int) -> int:
+    return int(f[TEAM_BASE + slot * TEAM_SLOT_WIDTH + 18])
+
+
+def team_perk(f: np.ndarray, slot: int) -> int:
+    base = TEAM_BASE + slot * TEAM_SLOT_WIDTH + 19
+    return int(np.argmax(f[base : base + NUM_PERKS]))
 
 
 def shop_pet_species(f: np.ndarray, slot: int) -> int:
@@ -60,6 +120,11 @@ def shop_pet_frozen(f: np.ndarray, slot: int) -> bool:
 def shop_food_species(f: np.ndarray, slot: int) -> int:
     base = SHOP_FOOD_BASE + slot * SHOP_FOOD_SLOT_WIDTH
     return int(np.argmax(f[base : base + 4]))
+
+
+def shop_food_frozen(f: np.ndarray, slot: int) -> bool:
+    base = SHOP_FOOD_BASE + slot * SHOP_FOOD_SLOT_WIDTH
+    return bool(f[base + 4])
 
 
 def gold(f: np.ndarray) -> float:
@@ -124,31 +189,102 @@ def test_reset_state(env):
         assert lives(obs.features) == STARTING_LIVES
         assert trophies(obs.features) == 0
         assert turn(obs.features) == 1
-        # turn 1: 3 pet slots, 1 food slot -> end_turn + 3 buy + reroll +
-        # 3 freeze_pet + 1 freeze_food = 9
-        assert obs.legal_actions.sum() == 9
+        # turn 1: 3 pet slots x 5 team positions (an empty board takes a pet
+        # anywhere, as the real game does) + end_turn + reroll + 3 freeze_pet
+        # + 1 freeze_food = 21
+        assert obs.legal_actions.sum() == 21
         assert not obs.legal_actions[FREEZE_PET_BASE + 3]  # slot 3 doesn't exist yet
         assert not obs.legal_actions[FREEZE_FOOD_BASE + 1]  # slot 1 doesn't exist yet
 
 
-def test_shop_grows_with_turn(env):
+def test_a_bought_pet_goes_where_it_is_dropped(env):
+    """The real game's buy carries a destination: `BoardEvents.PlayMinion`
+    takes the point you dropped the pet on, and an empty board accepts one
+    anywhere - holes included, since the board is never compacted."""
     result = env.reset(seed=0)
-    result = end_one_round(env, result)  # round 1 -> turn 2, still 3/1
-    assert not result.done
-    assert env.turn == 2
-    assert result.observations[0].legal_actions[BUY_PET_BASE + 2]
-    assert not result.observations[0].legal_actions[BUY_PET_BASE + 3]
+    result = env.step(buy(0, 3), END_TURN)
+    f = result.observations[0].features
+    assert team_species(f, 3) != 0
+    assert all(team_species(f, s) == 0 for s in (0, 1, 2, 4))
 
-    result = end_one_round(env, result)  # -> turn 3, now 4 pet slots
-    assert env.turn == 3
-    assert result.observations[0].legal_actions[BUY_PET_BASE + 3]
-    assert not result.observations[0].legal_actions[BUY_PET_BASE + 4]
 
-    result = end_one_round(env, result)  # -> turn 4, still 4/1
-    result = end_one_round(env, result)  # -> turn 5, now 5 pet / 2 food
+def test_dropping_a_pet_on_an_occupied_slot_inserts_and_shifts(env):
+    """Measured: dropping a different species onto an occupied position
+    inserts it there and slides the neighbours - pets at 2,3 taking a drop
+    on 2 end up at 3,4. It does not swap and it does not fail."""
+    for seed in range(200):
+        probe = make(ENV_ID)
+        result = probe.reset(seed=seed)
+        f = result.observations[0].features
+        species = [shop_pet_species(f, s) for s in range(3)]
+        if species[0] == species[1]:
+            continue  # a same-species drop is a stack, not an insert
+        result = probe.step(buy(0, 2), END_TURN)
+        first = team_species(result.observations[0].features, 2)
+        seat1 = IGNORED if result.observations[1] is None else END_TURN
+        result = probe.step(buy(1, 2), seat1)  # different species, same position
+        f = result.observations[0].features
+        assert team_species(f, 3) == first, "the sitting pet slid back"
+        assert team_species(f, 2) == species[1]
+        return
+    pytest.fail("no seed in 200 gave two different species in the first two shop slots")
+
+
+def test_buying_a_copy_onto_its_twin_stacks_in_one_action(env):
+    """The shop stack is ONE action in the real game (PlayType.Stack), not
+    buy-then-merge: exp goes up by one and the stats become the higher of
+    each, +1."""
+    for seed in range(200):
+        probe = make(ENV_ID)
+        result = probe.reset(seed=seed)
+        f = result.observations[0].features
+        species = [shop_pet_species(f, s) for s in range(3)]
+        pair = next(
+            ((i, j) for i in range(3) for j in range(i + 1, 3) if species[i] == species[j]),
+            None,
+        )
+        if pair is None:
+            continue
+        i, j = pair
+        result = probe.step(buy(i, 0), END_TURN)
+        seat1 = IGNORED if result.observations[1] is None else END_TURN
+        before = result.observations[0].features
+        assert team_level(before, 0) == 1
+        result = probe.step(buy(j, 0), seat1)  # dropped on its own twin
+        f = result.observations[0].features
+        assert team_species(f, 0) == species[i]
+        assert all(team_species(f, s) == 0 for s in range(1, 5)), "one pet, not two"
+        assert team_attack(f, 0) == team_attack(before, 0) + 1
+        assert team_health(f, 0) == team_health(before, 0) + 1
+        return
+    pytest.fail("no seed in 200 offered a duplicate species in the turn-1 shop")
+
+
+def test_shop_grows_with_tier_not_turn(env):
+    # Measured from the shipped build (policy-clash-re-tools' sap/shop.py): the shop
+    # grows on TIER, and tiers unlock on turns 3/5/7/9/11, so the pet slots
+    # go 3 (turns 1-4) -> 4 (turns 5-8) -> 5 (turns 9+) and the food slots
+    # go 1 -> 2 at turn 5. The old 4-slots-on-turn-3 schedule was folklore.
+    result = env.reset(seed=0)
+    for expected_turn in (2, 3, 4):
+        result = end_one_round(env, result)
+        assert not result.done
+        assert env.turn == expected_turn
+        assert result.observations[0].legal_actions[buy(2, 0)]
+        assert not result.observations[0].legal_actions[buy(3, 0)]
+        assert not result.observations[0].legal_actions[FREEZE_FOOD_BASE + 1]
+
+    result = end_one_round(env, result)  # -> turn 5, tier 3: 4 pet / 2 food
     assert env.turn == 5
-    assert result.observations[0].legal_actions[BUY_PET_BASE + 4]
+    assert result.observations[0].legal_actions[buy(3, 0)]
+    assert not result.observations[0].legal_actions[buy(4, 0)]
     assert result.observations[0].legal_actions[FREEZE_FOOD_BASE + 1]
+
+    for expected_turn in (6, 7, 8, 9):
+        result = end_one_round(env, result)
+        assert env.turn == expected_turn
+    assert env.turn == 9  # tier 5: the shop reaches its full 5 pet slots
+    assert result.observations[0].legal_actions[buy(4, 0)]
 
 
 def test_gold_resets_every_round_does_not_carry(env):
@@ -159,6 +295,227 @@ def test_gold_resets_every_round_does_not_carry(env):
     assert gold(result.observations[0].features) == STARTING_GOLD  # not 9, not accumulated
 
 
+def test_levelling_follows_the_shipped_exp_table(env):
+    """Measured from the shipped build (policy-clash-re-tools' sap/difftest_shop.py):
+    a copy is worth +1 exp and the higher of each stat +1, and the level
+    thresholds are exp 0/2/5 - so an Ant walks 2/2 L1, 3/3 L1, 4/4 L2 and
+    only reaches L3 on the sixth copy. sap2 used to level up on the second
+    copy, which made levels roughly three times too cheap."""
+    result = env.reset(seed=0)
+    # Find a seed whose turn-1 shop offers the same species twice, so one
+    # round is enough to observe a stack.
+    for seed in range(200):
+        probe = make(ENV_ID)
+        result = probe.reset(seed=seed)
+        f = result.observations[0].features
+        species = [shop_pet_species(f, s) for s in range(3)]
+        pair = next(
+            ((i, j) for i in range(3) for j in range(i + 1, 3) if species[i] == species[j]),
+            None,
+        )
+        if pair is None:
+            continue
+        i, j = pair
+        result = probe.step(buy(i, 0), END_TURN)
+        result = probe.step(buy(j, 1), IGNORED if result.observations[1] is None else END_TURN)
+        f = result.observations[0].features
+        base = TEAM_BASE
+        assert result.observations[0].legal_actions[COMBINE_BASE + 0]  # slots 0,1 stack
+        result = probe.step(COMBINE_BASE + 0, IGNORED if result.observations[1] is None else END_TURN)
+        f = result.observations[0].features
+        level_one_hot = f[base + 13 + 2 : base + 13 + 2 + MAX_LEVEL]
+        assert int(np.argmax(level_one_hot)) == 0, "one stack is exp 1, still level 1"
+        assert team_exp(f, 0) == 1, "the exp counter is observable, not just the level"
+        return
+    pytest.fail("no seed in 200 offered a duplicate species in the turn-1 shop")
+
+
+def test_horses_buff_counts_in_this_rounds_battle_and_expires_next_turn(env):
+    """Measured from the shipped build via policy-clash-re-tools: Horse's
+    ability effect carries Duration = Temp(1) - the only one in this
+    roster, Ant/Otter/Beaver/Duck/Fish are all Perm(0) - and the deadline
+    Temp(1) names is the start of the NEXT TURN, not the end of battle.
+    A Horse plus a freshly bought Ant showed Ant 3/2 on turn 1, including
+    that turn's battle, and 2/2 from turn 2 on.
+
+    Both halves are checked. The battle half compares two plays that
+    differ in nothing but the buff: buying the Horse first buffs the pet
+    dropped beside it, buying it second does not, and both plays end the
+    shop phase with the same two bodies in the same two positions. The
+    buffed pet is picked to be neither Otter nor Fish - the only pets
+    whose on-play/level-up draw from the seat RNG - so the two plays also
+    consume the RNG identically. A buff that did not reach the battle
+    would have to give both plays the same round result.
+    """
+    for seed in range(200):
+        f = make(ENV_ID).reset(seed=seed).observations[0].features
+        shop = [shop_pet_species(f, s) for s in range(3)]
+        horse = next((s for s in range(3) if shop[s] == HORSE_SPECIES), None)
+        # Not Otter (8) and not Fish (5): those two draw from the seat RNG
+        # when they are played, which would make the two plays below
+        # differ in more than the buff.
+        other = next((s for s in range(3) if shop[s] not in (HORSE_SPECIES, 5, 8)), None)
+        if horse is None or other is None:
+            continue
+
+        plays = {}
+        for name, first, second in (
+            ("buffed", (horse, 1), (other, 0)),  # Horse first: the next pet is summoned beside it
+            ("plain", (other, 0), (horse, 1)),   # Horse last: nobody is summoned after it
+        ):
+            probe = make(ENV_ID)
+            result = probe.reset(seed=seed)
+            # Seat 1 buys the same two pets in both plays, so seat 0's
+            # ordering is the only thing that differs.
+            result = probe.step(buy(*first), buy(0, 0))
+            seat1 = IGNORED if result.observations[1] is None else buy(1, 1)
+            result = probe.step(buy(*second), seat1)
+            plays[name] = (result.observations[0].features, end_one_round(probe, result))
+
+        buffed_obs, buffed_result = plays["buffed"]
+        plain_obs, plain_result = plays["plain"]
+        assert team_species(buffed_obs, 0) == team_species(plain_obs, 0) == shop[other]
+        assert team_species(buffed_obs, 1) == team_species(plain_obs, 1) == HORSE_SPECIES
+        assert team_attack(buffed_obs, 0) == team_attack(plain_obs, 0) + 1  # Horse is level 1
+        assert team_health(buffed_obs, 0) == team_health(plain_obs, 0)  # attack only
+
+        after = buffed_result.observations[0].features
+        assert team_species(after, 0) == shop[other], "the pet is still there"
+        assert team_attack(after, 0) == team_attack(plain_obs, 0), "the buff expired"
+
+        plain_after = plain_result.observations[0].features
+        if (trophies(after), lives(after)) == (trophies(plain_after), lives(plain_after)):
+            continue  # this seed's battle was not decided by one point of attack
+        return
+    pytest.fail("no seed in 200 gave a Horse plus a battle the buff decided")
+
+
+def test_a_stack_keeps_the_honey_perk_from_the_absorbed_copy(env):
+    """Honey changes no stat - it leaves a perk on the pet, which summons
+    a 1/1 Bee when that pet faints - and the perk survives a merge from
+    either copy: feed Honey to one of two twins, drag it onto the other,
+    and the survivor is the one carrying the Bee. The observation shows
+    the perk as a one-hot, so this reads it back from what the agent
+    actually sees."""
+    for seed in range(400):
+        probe = make(ENV_ID)
+        result = probe.reset(seed=seed)
+        f = result.observations[0].features
+        if shop_food_species(f, 0) != HONEY_FOOD:
+            continue
+        species = [shop_pet_species(f, s) for s in range(3)]
+        pair = next(
+            ((i, j) for i in range(3) for j in range(i + 1, 3) if species[i] == species[j]),
+            None,
+        )
+        if pair is None:
+            continue
+        i, j = pair
+        result = probe.step(buy(i, 0), END_TURN)  # 3g
+        seat1 = IGNORED if result.observations[1] is None else END_TURN
+        result = probe.step(buy(j, 1), seat1)  # 6g
+        result = probe.step(buy_food(0, 1), seat1)  # 9g, Honey onto the second copy
+        f = result.observations[0].features
+        assert team_perk(f, 0) == PERK_NONE
+        assert team_perk(f, 1) == PERK_HONEY
+        assert team_attack(f, 1) == team_attack(f, 0)  # Honey is not an Apple
+        assert team_health(f, 1) == team_health(f, 0)
+
+        result = probe.step(COMBINE_BASE + 0, seat1)  # pair (0,1): 1 is absorbed into 0
+        f = result.observations[0].features
+        assert team_species(f, 0) == species[i]
+        assert team_species(f, 1) == 0, "one body, not two"
+        assert team_exp(f, 0) == 1
+        assert team_perk(f, 0) == PERK_HONEY, "the perk came with the absorbed copy"
+        return
+    pytest.fail("no seed in 400 offered a duplicate species and Honey in the same turn-1 shop")
+
+
+def test_pigeon_stocks_free_bread_crumbs_without_evicting_food(env):
+    """Measured: selling a Pigeon prepends `level` free Bread Crumbs to the
+    food shop and leaves the rolled food where it is (pushed right), which
+    is why the food array is wider than the rolled capacity - a roll only
+    ever fills 1 or 2 slots."""
+    for seed in range(200):
+        probe = make(ENV_ID)
+        result = probe.reset(seed=seed)
+        f = result.observations[0].features
+        pigeon_slot = next(
+            (s for s in range(3) if shop_pet_species(f, s) == PIGEON_SPECIES), None
+        )
+        if pigeon_slot is None:
+            continue
+        food_before = shop_food_species(f, 0)
+        result = probe.step(buy(pigeon_slot, 0), END_TURN)
+        seat1 = IGNORED if result.observations[1] is None else END_TURN
+        result = probe.step(SELL_BASE + 0, seat1)
+        f = result.observations[0].features
+        assert shop_food_species(f, 0) == BREAD_CRUMBS_FOOD
+        assert shop_food_species(f, 1) == food_before  # the rolled food survived
+        assert result.observations[0].legal_actions[FREEZE_FOOD_BASE + 1]
+        return
+    pytest.fail("no seed in 200 offered a Pigeon in the turn-1 shop")
+
+
+def test_pigeon_crumbs_arrive_frozen_and_survive_one_roll_up_to_capacity(env):
+    """Measured: the crumbs a Pigeon stocks are FROZEN, which is what
+    carries them through the next roll - and a roll keeps frozen food only
+    up to the rolled capacity, dropping the rest. On turn 1 that capacity
+    is 1, so a level-3 Pigeon's three crumbs come back as exactly one."""
+    for seed in range(200):
+        probe = make(ENV_ID)
+        result = probe.reset(seed=seed)
+        f = result.observations[0].features
+        pigeon = next((s for s in range(3) if shop_pet_species(f, s) == PIGEON_SPECIES), None)
+        if pigeon is None:
+            continue
+        result = probe.step(buy(pigeon, 0), END_TURN)
+        seat1 = IGNORED if result.observations[1] is None else END_TURN
+        result = probe.step(SELL_BASE + 0, seat1)
+        f = result.observations[0].features
+        assert shop_food_species(f, 0) == BREAD_CRUMBS_FOOD
+        assert shop_food_frozen(f, 0), "a stocked crumb is frozen"
+        seat1 = IGNORED if result.observations[1] is None else END_TURN
+        result = probe.step(REROLL, seat1)
+        f = result.observations[0].features
+        # Capacity 1 on turn 1: the crumb survives, everything past it went.
+        assert shop_food_species(f, 0) == BREAD_CRUMBS_FOOD
+        assert shop_food_frozen(f, 0)
+        assert shop_food_species(f, 1) == 0
+        return
+    pytest.fail("no seed in 200 offered a Pigeon in the turn-1 shop")
+
+
+def test_the_food_shop_is_wide_enough_for_a_team_of_pigeons(env):
+    """The array is sized for the worst case the real game allows - a full
+    team of level-3 Pigeons sold in one phase - because measured against
+    the shipped build nothing is evicted and every slot stays buyable."""
+    from policyclash_envs.sap2 import MAX_LEVEL as _lvl
+
+    assert FOOD_SLOTS == 2 + TEAM_SLOTS * _lvl
+    # And the action space reaches all of them.
+    assert ACT_FREEZE_PET_BASE == ACT_BUY_FOOD_BASE + FOOD_SLOTS * TEAM_SLOTS
+    assert NUM_ACTIONS == ACT_FREEZE_FOOD_BASE + FOOD_SLOTS
+
+
+def test_a_frozen_shop_pet_slides_to_the_leftmost_slot(env):
+    """Measured: a roll refills around frozen items and they slide left -
+    freezing slot 1 of three and rerolling leaves the frozen pet at slot 0.
+    The offers would be the same either way, but the slot decides which
+    action index buys it, so the ordering is behaviour."""
+    result = env.reset(seed=0)
+    f = result.observations[0].features
+    frozen_species = shop_pet_species(f, 1)
+    result = env.step(FREEZE_PET_BASE + 1, END_TURN)
+    assert shop_pet_frozen(result.observations[0].features, 1)
+    seat1 = IGNORED if result.observations[1] is None else END_TURN
+    result = env.step(REROLL, seat1)
+    f = result.observations[0].features
+    assert shop_pet_species(f, 0) == frozen_species
+    assert shop_pet_frozen(f, 0)
+    assert not shop_pet_frozen(f, 1)
+
+
 def test_a_lost_battle_costs_a_life_not_the_pet(env):
     """The corrected behavior: fainting in battle is not permanent. Search
     a small seed range for a decisive first round (loser found by their
@@ -167,7 +524,7 @@ def test_a_lost_battle_costs_a_life_not_the_pet(env):
     for seed in range(100):
         probe = make(ENV_ID)
         result = probe.reset(seed=seed)
-        result = probe.step(BUY_PET_BASE + 0, BUY_PET_BASE + 0)
+        result = probe.step(buy(0, 0), buy(0, 0))
         before = [
             [team_species(result.observations[s].features, t) for t in range(5)] for s in range(2)
         ]
@@ -215,7 +572,7 @@ def test_win_on_ten_trophies():
     # (and never losing a life) well inside MAX_ROUNDS.
     env = make(ENV_ID)
     result = env.reset(seed=0)
-    result = env.step(BUY_PET_BASE + 0, END_TURN)
+    result = env.step(buy(0, 0), END_TURN)
     result = end_both(env, result)
     assert result.outcome is Outcome.PLAYER_0
     assert result.termination is Termination.NATURAL
@@ -239,7 +596,7 @@ def test_budget_forces_end_after_twenty_actions_per_round(env):
     # expects - budgets reset every round, so hitting one is a round
     # event, not necessarily an end-of-episode one.
     result = env.reset(seed=0)
-    result = env.step(BUY_PET_BASE + 0, BUY_PET_BASE + 0)
+    result = env.step(buy(0, 0), buy(0, 0))
     for _ in range(19):
         result = env.step(REPOSITION_BASE + 0, REPOSITION_BASE + 0)
         if result.done:
@@ -261,7 +618,7 @@ def test_deterministic_given_same_seed():
     def play(seed):
         e = make(ENV_ID)
         result = e.reset(seed=seed)
-        result = e.step(BUY_PET_BASE + 0, BUY_PET_BASE + 0)
+        result = e.step(buy(0, 0), buy(0, 0))
         result = end_both(e, result)
         result = end_both(e, result)
         return e.replay(), (result.outcome, result.done)

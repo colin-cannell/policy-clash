@@ -1,12 +1,14 @@
 """SAP2 (Super Auto Pets), the full Arena match - Tier 1 roster.
 
-The actual multi-round Arena match: lives, trophies, a shop that grows
-and gates tiers by turn number, freeze, and the turn-3 life-back rule
+The actual multi-round Arena match: lives, trophies, a tier-gated shop
+that grows with the turn number, freeze, and the turn-3 life-back rule
 real Arena mode uses - not a single shop-phase-then-one-battle slice. See
-docs/envs/sap-v2.md for the design and the wiki sources every rule is
-drawn from.
+docs/envs/sap-v2.md for the design. The shop-phase numbers (level
+requirements, sell value, shop capacity per tier, Pigeon's free Bread
+Crumbs) were measured out of the shipped build by policy-clash-re-tools, not
+taken from a wiki.
 
-Roster is still Tier 1 only (10 pets, 2 foods) - the *match engine* here
+Roster is still Tier 1 only (10 pets, 3 foods) - the *match engine* here
 is the real game's full structure; the pet roster is a separate, later
 expansion tracked in sap-v2.md's appendix.
 
@@ -29,7 +31,29 @@ NUM_ACTIONS = _sap2.NUM_ACTIONS
 MAX_TICKS = _sap2.MAX_TICKS
 TEAM_SLOTS = _sap2.TEAM_SLOTS
 MAX_SHOP_PETS = _sap2.MAX_SHOP_PETS
-MAX_SHOP_FOOD = _sap2.MAX_SHOP_FOOD
+MAX_SHOP_FOOD = _sap2.MAX_SHOP_FOOD  # the largest food shop a ROLL fills
+FOOD_SLOTS = _sap2.FOOD_SLOTS  # array width: Pigeon prepends up to 3 free crumbs
+MAX_LEVEL = _sap2.MAX_LEVEL
+MAX_EXP = _sap2.MAX_EXP  # a pet stops stacking here (LevelRequirements[-1])
+MAX_STATS = _sap2.MAX_STATS  # BoardConstants.MaxStats - attack and health cap
+NUM_PERKS = _sap2.NUM_PERKS  # width of a team slot's perk one-hot
+PERK_NONE = _sap2.PERK_NONE
+PERK_HONEY = _sap2.PERK_HONEY  # the only perk this roster's foods produce
+
+# Layout, for consumers that decode features or build actions. Derived from
+# the C core rather than copied, so a widened block cannot leave a stale
+# offset behind in a test, a bot or the visualizer.
+TEAM_SLOT_FLOATS = _sap2.TEAM_SLOT_FLOATS
+SHOP_PET_SLOT_FLOATS = _sap2.SHOP_PET_SLOT_FLOATS
+SHOP_FOOD_SLOT_FLOATS = _sap2.SHOP_FOOD_SLOT_FLOATS
+ACT_BUY_PET_BASE = _sap2.ACT_BUY_PET_BASE
+ACT_SELL_BASE = _sap2.ACT_SELL_BASE
+ACT_COMBINE_BASE = _sap2.ACT_COMBINE_BASE
+ACT_REROLL = _sap2.ACT_REROLL
+ACT_REPOSITION_BASE = _sap2.ACT_REPOSITION_BASE
+ACT_BUY_FOOD_BASE = _sap2.ACT_BUY_FOOD_BASE
+ACT_FREEZE_PET_BASE = _sap2.ACT_FREEZE_PET_BASE
+ACT_FREEZE_FOOD_BASE = _sap2.ACT_FREEZE_FOOD_BASE
 STARTING_GOLD = _sap2.STARTING_GOLD
 STARTING_LIVES = _sap2.STARTING_LIVES
 TROPHIES_TO_WIN = _sap2.TROPHIES_TO_WIN

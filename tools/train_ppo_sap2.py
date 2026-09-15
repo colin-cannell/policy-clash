@@ -8,7 +8,7 @@ Design choices that the question forces:
 
 - **Action masking is mandatory, not an optimization.** An out-of-range action
   forfeits the match outright (`Termination.ILLEGAL_ACTION`), and most of the
-  49 actions are illegal at any given tick. The policy masks its logits with
+  67 actions are illegal at any given tick. The policy masks its logits with
   `Observation.legal_actions`, so it cannot forfeit and cannot waste capacity
   on unreachable actions.
 - **Reward is terminal-only and about 146 ticks away**, which is a hard credit
@@ -63,6 +63,7 @@ except ImportError:
     sys.exit("Run this with envs/.venv/bin/python - policyclash_envs lives there.")
 
 from arena_sap2 import ENV_ID, load_bot
+from policyclash_envs.sap2 import NUM_ACTIONS, OBS_FLOATS
 
 # The opponent pool comes from the committed bots, not from a private copy.
 # One source means a bot cannot behave one way here and another way on the
@@ -70,8 +71,11 @@ from arena_sap2 import ENV_ID, load_bot
 make_greedy = load_bot("greedy")
 make_random = load_bot("random")
 
-OBS = 174
-ACTIONS = 49
+# Taken from the env rather than pinned: the observation and action layouts
+# move whenever sap2's rules are corrected against the shipped game (see
+# policy-clash-re-tools), and a stale copy here silently mis-shapes the network.
+OBS = OBS_FLOATS
+ACTIONS = NUM_ACTIONS
 IGNORED = 0
 
 # Seed ranges. Disjoint by construction: a policy that memorized a training
@@ -96,8 +100,8 @@ def potential(features: np.ndarray) -> float:
 class ActorCritic(nn.Module):
     """Two hidden layers, then a policy head and a value head.
 
-    Small on purpose. The observation is 174 floats of mostly one-hot species
-    blocks, the action space is 49, and the run has to stay cheap; a wider
+    Small on purpose. The observation is ~190 floats of mostly one-hot species
+    blocks, the action space is 67, and the run has to stay cheap; a wider
     network would spend the budget on parameters rather than on episodes.
     """
 

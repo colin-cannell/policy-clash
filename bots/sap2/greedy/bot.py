@@ -2,13 +2,14 @@
 
 The rule, in priority order:
 
-1. Combine a duplicate pair. A level-up is `max(a, b) + 1` on both stats, so it
-   beats holding two copies, and it frees a team slot.
-2. Buy the shop pet with the best attack plus health, if a team slot is empty.
-   Board presence dominates at Tier 1: an empty slot contributes nothing to a
-   battle.
-3. Buy a pet that duplicates a species already on the team, which sets up rule
-   1 on the next tick.
+1. Buy a shop copy of a species already on the team, dropped straight onto
+   that pet: one action in the real game, and a level-up is
+   `max(a, b) + 1` on both stats, so it beats holding two bodies.
+2. Combine a duplicate pair already sitting on the team - the same rule,
+   for copies bought before this one.
+3. Buy the shop pet with the best attack plus health into an empty
+   position. Board presence dominates at Tier 1: an empty slot contributes
+   nothing to a battle.
 4. End the turn.
 
 The rule never rerolls, sells, buys food, or freezes. Each of those needs a
@@ -26,11 +27,12 @@ from itertools import combinations
 import numpy as np
 
 END_TURN = 0
-BUY_PET_BASE = 1
-COMBINE_BASE = 11
+BUY_PET_BASE = 1    # +0..24: shop_slot*5 + team position
+COMBINE_BASE = 31   # +0..9: team slot pair
 
 TEAM_BASE = 4  # after gold(1) lives(1) trophies(1) turn(1)
-TEAM_SLOT_WIDTH = 19
+# 13 species one-hot, attack, health, 3 level one-hot, exp, 2 perk one-hot.
+TEAM_SLOT_WIDTH = 21
 SHOP_PET_BASE = TEAM_BASE + 5 * TEAM_SLOT_WIDTH
 SHOP_PET_SLOT_WIDTH = 13
 
@@ -48,19 +50,30 @@ class Bot:
     def act(self, obs) -> int:
         f = obs.features
         legal = obs.legal_actions
+        team = [self._team_species(f, s) for s in range(5)]
+
+        # A shop copy dropped on its twin stacks in one action.
+        stacks = [
+            (shop, slot)
+            for shop in range(5)
+            for slot in range(5)
+            if team[slot] and self._shop_species(f, shop) == team[slot]
+            and legal[BUY_PET_BASE + shop * 5 + slot]
+        ]
+        if stacks:
+            shop, slot = max(stacks, key=lambda pair: self._value(f, pair[0]))
+            return BUY_PET_BASE + shop * 5 + slot
 
         for idx in range(len(PAIRS)):
             if legal[COMBINE_BASE + idx]:
                 return COMBINE_BASE + idx
 
-        team = [self._team_species(f, s) for s in range(5)]
-        buys = [s for s in range(5) if legal[BUY_PET_BASE + s]]
-        if buys:
-            if any(sp == 0 for sp in team):
-                return BUY_PET_BASE + max(buys, key=lambda s: self._value(f, s))
-            dupes = [s for s in buys if self._shop_species(f, s) in team]
-            if dupes:
-                return BUY_PET_BASE + max(dupes, key=lambda s: self._value(f, s))
+        empties = [s for s in range(5) if team[s] == 0]
+        if empties:
+            dest = empties[0]
+            buys = [s for s in range(5) if legal[BUY_PET_BASE + s * 5 + dest]]
+            if buys:
+                return BUY_PET_BASE + max(buys, key=lambda s: self._value(f, s)) * 5 + dest
 
         return END_TURN
 
