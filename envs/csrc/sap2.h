@@ -8,12 +8,16 @@
  * Rather than one shop phase + one battle, this is the actual Arena
  * match: many rounds of shop-then-battle, team state persisting round to
  * round, lives and trophies, a tier-gated shop that grows with the turn
- * number, and freeze. Roster is still Tier 1 only (10 pets, 2 foods) -
- * the match *engine* is the full game; the roster is a separate, later
- * expansion (sap-v2.md's appendix), and shipping both unverified at once
+ * number, and freeze. Roster is Tier 1 (10 pets) plus Tier 2 (10 more,
+ * unlocked turn 3+) and their foods - the match *engine* is the full
+ * game; Tiers 3-6 are separate, later expansions (sap-v2.md's appendix),
+ * and shipping the engine and the full roster unverified in one pass
  * risks exactly the kind of bug a smaller, single-round build of this
  * same engine caught repeatedly during development, at a sixth of this
- * scope - see sap-v2.md for that history.
+ * scope - see sap-v2.md for that history. Two Tier-2 abilities are
+ * documented no-ops for now (Spider's Faint summon, Hedgehog's Faint
+ * damage) - see sap2_battle_resolve_faint's own comments for exactly
+ * why and what unblocks each.
  *
  * Self-contained: its own species/food tables, its own RNG, its own
  * battle resolution - not built on top of another file, so it can be
@@ -56,39 +60,74 @@
                                      * genuinely reachable here, unlike sap-v1 */
 #define SAP2_MAX_EXCHANGES 71      /* measured battle cap, see sap2_battle */
 
-/* Species/food/trigger tables: identical to sap.h - same 10 shop species,
- * same 2 tokens, same 3 foods. Roster is still Tier 1 only; see the file
- * header. Kept as a separate copy (not shared with sap.h) for the same
- * reason connect4.h and tron_duel.h don't share code with each other -
- * each env file is self-contained. */
+/* Species/food/trigger tables. Tier 1 (10 pets, identical to sap.h) plus
+ * Tier 2 (10 more pets), both read out of the shipped build via
+ * policy-clash-re-tools (roster.py's minion/spell dump, cross-checked
+ * against battle.py/shop.py for the abilities below) rather than
+ * transcribed from a wiki - see docs/envs/sap-v2.md's Tier-2 section for
+ * what that dump caught that a wiki would have gotten wrong (renamed/
+ * rebalanced items: this build's Tier-2 foods are MeatBone/Muffin/Pill,
+ * not the "Cupcake/Sleeping Pill" names an older wiki snapshot would
+ * suggest, and Worm's ability stocks a *better* Apple, not a fixed
+ * "friend eats an apple" trigger). Kept as a separate copy (not shared
+ * with sap.h) for the same reason connect4.h and tron_duel.h don't share
+ * code with each other - each env file is self-contained. */
 enum {
     SAP2_SPECIES_EMPTY = 0,
     SAP2_ANT = 1, SAP2_BEAVER = 2, SAP2_CRICKET = 3, SAP2_DUCK = 4, SAP2_FISH = 5,
     SAP2_HORSE = 6, SAP2_MOSQUITO = 7, SAP2_OTTER = 8, SAP2_PIG = 9, SAP2_PIGEON = 10,
-    SAP2_NUM_SHOP_SPECIES = 10,
-    SAP2_CRICKET_TOKEN = 11,
-    SAP2_BEE = 12,
-    SAP2_NUM_ALL_SPECIES = 13
+    SAP2_CRAB = 11, SAP2_FLAMINGO = 12, SAP2_HEDGEHOG = 13, SAP2_KANGAROO = 14, SAP2_PEACOCK = 15,
+    SAP2_RAT = 16, SAP2_SNAIL = 17, SAP2_SPIDER = 18, SAP2_SWAN = 19, SAP2_WORM = 20,
+    SAP2_NUM_SHOP_SPECIES = 20, /* every buyable species across every tier this roster has */
+    SAP2_CRICKET_TOKEN = 21,
+    SAP2_BEE = 22,
+    SAP2_DIRTY_RAT = 23,   /* Rat's Faint summon - lands on the OPPONENT's board, see sap2_battle_resolve_faint */
+    SAP2_NUM_ALL_SPECIES = 24
 };
-enum { SAP2_FOOD_EMPTY = 0, SAP2_APPLE = 1, SAP2_HONEY = 2, SAP2_BREAD_CRUMBS = 3, SAP2_NUM_FOODS = 4 };
-static const int SAP2_FOOD_COST[SAP2_NUM_FOODS] = {0, 3, 3, 0};
+enum {
+    SAP2_FOOD_EMPTY = 0, SAP2_APPLE = 1, SAP2_HONEY = 2, SAP2_BREAD_CRUMBS = 3,
+    SAP2_MEATBONE = 4, SAP2_MUFFIN = 5, SAP2_PILL = 6, SAP2_APPLE2 = 7, SAP2_APPLE3 = 8,
+    SAP2_APPLE_DISCOUNT = 9,
+    SAP2_NUM_FOODS = 10
+};
+/* Apple2/Apple3 ("Better"/"Best" Apple) and Apple-Discount only ever enter
+ * a shop via Worm's ability - see sap2_fire_start_of_turn - never a
+ * natural roll, same status Bread Crumbs already had for Pigeon.
+ * Apple-Discount is its own species rather than reusing SAP2_APPLE:
+ * measured via policy-clash-re-tools, Worm's level-1 stock is a
+ * *2-gold* Apple sitting right next to a normally-rolled 3-gold one in
+ * the same shop - same name, same +1/+1, different price - and every
+ * cost/effect table here is keyed by species, so one id can't hold two
+ * prices. */
+static const int SAP2_FOOD_COST[SAP2_NUM_FOODS] = {0, 3, 3, 0, 3, 3, 1, 2, 2, 2};
 
 /* Perks - what a food leaves ON a pet, as opposed to the stat change it
- * applies once and forgets. Honey is the only one this roster can
- * produce.
+ * applies once and forgets.
  *
  * The shipped build's perk template (read via policy-clash-re-tools)
  * carries Name, Durability, Positive, MidBattle and Aura. Honey fills
  * in none of them beyond the name - it has no durability, so there is
  * no charge counter to model and inventing one would be fiction - which
- * leaves the id as the whole of the perk here. The next perk in line is
- * Meat Bone at Tier 2, which does use more of the template; it hooks in
- * as a second non-zero id plus a table of exactly the template fields
- * it needs, and the pet's `perk` field is already wide enough for it. */
-enum { SAP2_PERK_NONE = 0, SAP2_PERK_HONEY = 1, SAP2_NUM_PERKS = 2 };
+ * leaves the id as the whole of the perk here. Meat Bone (Tier 2) is
+ * different: measured directly via a scripted battle (policy-clash-re-tools'
+ * battle.py, a MeatBone-perked 2/2 Ant vs. a 50-health dummy), it deals
+ * 5 damage while its CARD STILL READS 2 ATTACK - the +3 is hidden bonus
+ * damage on the attack, not a stat change, so it lives in the exchange
+ * loop (sap2_battle) rather than in sap2_pet_attack. Flat +3, no level
+ * scaling - there is no MeatBone2/MeatBone3 in the shipped spell table. */
+enum { SAP2_PERK_NONE = 0, SAP2_PERK_HONEY = 1, SAP2_PERK_MEATBONE = 2, SAP2_NUM_PERKS = 3 };
+#define SAP2_MEATBONE_BONUS_DAMAGE 3
 
-static const int8_t SAP2_BASE_ATK[SAP2_NUM_ALL_SPECIES] = {0, 2, 3, 1, 2, 2, 2, 2, 1, 4, 3, 0, 1};
-static const int8_t SAP2_BASE_HP[SAP2_NUM_ALL_SPECIES] = {0, 2, 2, 3, 2, 3, 1, 2, 4, 1, 2, 0, 1};
+static const int8_t SAP2_BASE_ATK[SAP2_NUM_ALL_SPECIES] = {
+    0, 2, 3, 1, 2, 2, 2, 2, 1, 4, 3,   /* empty, Tier 1 */
+    4, 3, 4, 2, 2, 3, 2, 2, 1, 1,      /* Tier 2: Crab..Worm */
+    0, 1, 1                           /* Cricket Token, Bee, Dirty Rat */
+};
+static const int8_t SAP2_BASE_HP[SAP2_NUM_ALL_SPECIES] = {
+    0, 2, 2, 3, 2, 3, 1, 2, 4, 1, 2,
+    1, 2, 2, 2, 5, 6, 3, 2, 2, 4,
+    0, 1, 1
+};
 
 /* Experience and levels. Measured from the shipped build via
  * policy-clash-re-tools (BoardConstants.LevelRequirements = [0, 2, 5],
@@ -120,10 +159,11 @@ static inline uint8_t sap2_level_for_exp(uint8_t exp) {
  * turn that gives 3/1 for turns 1-4, 4/2 for turns 5-8 and 5/2 from
  * turn 9 on, which is exactly what the oracle reports.
  *
- * The tier does NOT yet select which species can roll: the roster is
- * Tier 1 only, so every shop species is already legal at tier 1. A
- * later tier-expansion phase hooks its roster filter onto
- * sap2_tier_for_turn; nothing else needs to change. */
+ * The tier now DOES select which species can roll, as of the Tier-2
+ * roster: once a tier unlocks, every species at or below it stays in the
+ * pool (measured - see sap2_roll_shop and the roll-pool tables below).
+ * A later tier-expansion phase widens SAP2_ROLLABLE_SPECIES_ON_TIER and
+ * SAP2_ROLLABLE_FOOD_ON_TIER; nothing else here needs to change. */
 static const int SAP2_TIER_ON_TURN[] = {3, 5, 7, 9, 11};
 static const int SAP2_PET_CAPACITY_ON_TIER[] = {3, 5};
 static const int SAP2_FOOD_CAPACITY_ON_TIER[] = {3};
@@ -136,6 +176,30 @@ static inline int sap2_tier_for_turn(int turn) {
         }
     }
     return tier;
+}
+
+/* Roll pools by tier. Species are laid out contiguously by tier (Tier 1 =
+ * ids 1..10, Tier 2 = 11..20), so "every species at or below the current
+ * tier" is just "1 + rng % highest id" - same trick sap2_roll_shop always
+ * used, now tier-aware instead of a hardcoded 10. Food is NOT contiguous
+ * across tiers this way (Apple/Honey are ids 1-2, but Bread Crumbs and the
+ * Worm-only Better/Best Apple sit between them and Tier 2's Meat
+ * Bone/Muffin/Pill), so the food pool is an explicit table instead. */
+static inline int sap2_highest_rollable_species(int turn) {
+    return sap2_tier_for_turn(turn) >= 2 ? 20 : 10;
+}
+
+static const uint8_t SAP2_NATURAL_FOOD_TIER1[] = {SAP2_APPLE, SAP2_HONEY};
+static const uint8_t SAP2_NATURAL_FOOD_TIER2[] = {SAP2_APPLE, SAP2_HONEY, SAP2_MEATBONE, SAP2_MUFFIN, SAP2_PILL};
+
+static inline void sap2_natural_food_pool(int turn, const uint8_t **pool, int *n) {
+    if (sap2_tier_for_turn(turn) >= 2) {
+        *pool = SAP2_NATURAL_FOOD_TIER2;
+        *n = (int)(sizeof(SAP2_NATURAL_FOOD_TIER2) / sizeof(SAP2_NATURAL_FOOD_TIER2[0]));
+    } else {
+        *pool = SAP2_NATURAL_FOOD_TIER1;
+        *n = (int)(sizeof(SAP2_NATURAL_FOOD_TIER1) / sizeof(SAP2_NATURAL_FOOD_TIER1[0]));
+    }
 }
 
 static inline void sap2_shop_size(int turn, int *pet_slots, int *food_slots) {
@@ -298,6 +362,9 @@ typedef struct {
     uint64_t rng;
     int ended;
     int actions_taken;
+    int lost_last_round; /* for Snail's EndTurn-conditional-on-a-loss ability -
+                           * see sap2_resolve_round (where it is set) and
+                           * sap2_apply (where Snail reads it) */
 } SapSeat2;
 
 typedef struct {
@@ -353,7 +420,12 @@ static inline int sap2_pick_random(uint64_t *rng, const int *candidates, int cou
  * slot 0. sap2 used to leave frozen items where they sat, which kept the
  * offers right but put them behind different action indices than the real
  * game does. */
-static inline void sap2_roll_shop(SapSeat2 *s, int pet_slots, int food_slots) {
+static inline void sap2_roll_shop(SapSeat2 *s, int turn, int pet_slots, int food_slots) {
+    const int species_hi = sap2_highest_rollable_species(turn);
+    const uint8_t *food_pool;
+    int food_pool_n;
+    sap2_natural_food_pool(turn, &food_pool, &food_pool_n);
+
     SapShopPet2 kept_pets[SAP2_MAX_SHOP_PETS];
     int n_pets = 0;
     for (int i = 0; i < pet_slots; i++) {
@@ -365,7 +437,7 @@ static inline void sap2_roll_shop(SapSeat2 *s, int pet_slots, int food_slots) {
         s->shop_pets[i] = kept_pets[i];
     }
     for (int i = n_pets; i < pet_slots; i++) {
-        s->shop_pets[i].species = (uint8_t)(1 + sap2_splitmix64(&s->rng) % SAP2_NUM_SHOP_SPECIES);
+        s->shop_pets[i].species = (uint8_t)(1 + sap2_splitmix64(&s->rng) % (uint64_t)species_hi);
         s->shop_pets[i].hp_bonus = 0;
         s->shop_pets[i].frozen = 0;
     }
@@ -389,9 +461,10 @@ static inline void sap2_roll_shop(SapSeat2 *s, int pet_slots, int food_slots) {
         s->shop_food[i] = kept_food[i];
     }
     for (int i = n_food; i < SAP2_FOOD_SLOTS; i++) {
-        /* Only Apple/Honey roll naturally - Bread Crumbs is Pigeon-only. */
+        /* Only the tier's natural pool rolls - Bread Crumbs (Pigeon) and
+         * Apple2/Apple3 (Worm) are stocked, never rolled. */
         s->shop_food[i].species =
-            (i < food_slots) ? (uint8_t)(1 + sap2_splitmix64(&s->rng) % 2) : SAP2_FOOD_EMPTY;
+            (i < food_slots) ? food_pool[sap2_splitmix64(&s->rng) % (uint64_t)food_pool_n] : SAP2_FOOD_EMPTY;
         s->shop_food[i].frozen = 0;
     }
 }
@@ -409,6 +482,23 @@ static inline int sap2_friends(const SapSeat2 *s, int exclude, int *out) {
     int n = 0;
     for (int i = 0; i < SAP2_TEAM; i++) {
         if (i != exclude && s->team[i].species != SAP2_SPECIES_EMPTY) {
+            out[n++] = i;
+        }
+    }
+    return n;
+}
+
+/* Snail's shop-phase ability targets "the N nearest friends ahead" in the
+ * PERSISTENT team array, which - unlike the battle array sap2_battle_load
+ * builds - is never compacted: a buy can leave real holes (see
+ * sap2_insert_gap's own comment). "Ahead" of team index `from` means lower
+ * indices, same front-to-back convention sap2_battle_load reads the array
+ * in; "nearest" skips holes rather than counting raw distance. Returns up
+ * to `k` slot indices, nearest first. */
+static inline int sap2_nearest_ahead(const SapSeat2 *s, int from, int k, int *out) {
+    int n = 0;
+    for (int i = from - 1; i >= 0 && n < k; i--) {
+        if (s->team[i].species != SAP2_SPECIES_EMPTY) {
             out[n++] = i;
         }
     }
@@ -737,25 +827,52 @@ static inline void sap2_reposition(SapSeat2 *s, int i, int j) {
     s->team[j] = tmp;
 }
 
+/* Apple/Apple2/Apple3/Bread Crumbs all give a flat, permanent (atk, hp)
+ * pair - measured via policy-clash-re-tools (Apple2 "Better Apple" is
+ * +2/+2, Apple3 "Best Apple" is +3/+3; Bread Crumbs, already in sap-v1,
+ * is attack-only). Indexed by food species; foods with no stat effect
+ * (Honey, Meat Bone, Pill, and the always-zero EMPTY slot) are 0/0 and
+ * handled by their own branch below instead. */
+static const int8_t SAP2_FOOD_ATK_BONUS[SAP2_NUM_FOODS] = {0, 1, 0, 1, 0, 0, 0, 2, 3};
+static const int8_t SAP2_FOOD_HP_BONUS[SAP2_NUM_FOODS] = {0, 1, 0, 0, 0, 0, 0, 2, 3};
+
 static inline void sap2_buy_food(SapSeat2 *s, int food_slot, int target) {
     const uint8_t food = s->shop_food[food_slot].species;
     s->gold = (int16_t)(s->gold - SAP2_FOOD_COST[food]);
     s->shop_food[food_slot].species = SAP2_FOOD_EMPTY;
     s->shop_food[food_slot].frozen = 0;
 
-    /* Apple and Bread Crumbs change stats permanently; Honey changes no
-     * stat at all and leaves a perk on the pet instead - that is the
-     * whole of what it does until the pet faints in battle. */
     SapPet2 *p = &s->team[target];
-    if (food == SAP2_APPLE || food == SAP2_BREAD_CRUMBS) {
-        p->attack = (int8_t)(p->attack + 1);
-        if (food == SAP2_APPLE) {
-            p->health = (int8_t)(p->health + 1);
-        }
-        sap2_clamp_stats(p);
-    } else if (food == SAP2_HONEY) {
-        p->perk = SAP2_PERK_HONEY;
+    if (food == SAP2_PILL) {
+        /* Sleeping Pill: EffectDestroyMinion, measured via
+         * policy-clash-re-tools - the target pet is simply gone. No sell
+         * value, no Sell-triggered ability (Beaver/Duck/Pig/Pigeon all
+         * stay silent), unlike sap2_sell. */
+        p->species = SAP2_SPECIES_EMPTY;
+        return;
     }
+    if (food == SAP2_MUFFIN) {
+        /* Measured: EffectGiveBuff with Duration = Temp(1), same lifecycle
+         * as Horse's buff - live through this turn's battle, cleared at
+         * the start of the next turn (sap2_resolve_round). +3/+3, flat -
+         * a food has no level to scale by. */
+        int temp = (int)p->temp_attack + 3;
+        p->temp_attack = (int8_t)(temp > SAP2_MAX_STATS ? SAP2_MAX_STATS : temp);
+        temp = (int)p->temp_health + 3;
+        p->temp_health = (int8_t)(temp > SAP2_MAX_STATS ? SAP2_MAX_STATS : temp);
+        return;
+    }
+    if (food == SAP2_HONEY) {
+        p->perk = SAP2_PERK_HONEY;
+        return;
+    }
+    if (food == SAP2_MEATBONE) {
+        p->perk = SAP2_PERK_MEATBONE;
+        return;
+    }
+    p->attack = (int8_t)(p->attack + SAP2_FOOD_ATK_BONUS[food]);
+    p->health = (int8_t)(p->health + SAP2_FOOD_HP_BONUS[food]);
+    sap2_clamp_stats(p);
 }
 
 static inline void sap2_toggle_freeze_pet(SapSeat2 *s, int slot) {
@@ -830,7 +947,36 @@ static inline void sap2_legal_for(const SapSeat2 *s, int pet_slots, uint8_t *out
     }
 }
 
-static inline void sap2_apply(SapSeat2 *s, int action, int pet_slots, int food_slots) {
+/* Snail's shop-phase ability: TriggerEndTurn, gated by
+ * ConditionPreviousOutcome/WasPreviousOutcomeLost - measured via
+ * policy-clash-re-tools' ability dump directly (not an end-to-end round
+ * drive: the ability template is real game data either way, same
+ * standing as the turn-3 life-back rule, whose own end-to-end path is
+ * documented as unverified for the same reason - see sap2_resolve_round).
+ * Fires for every Snail on the team when this seat's shop turn ends,
+ * provided this seat lost the previous round; +1/+2/+3 attack (by level)
+ * to the 3 nearest friends ahead of each Snail, attack only. */
+static inline void sap2_fire_end_turn(SapSeat2 *s) {
+    if (!s->lost_last_round) {
+        return;
+    }
+    for (int i = 0; i < SAP2_TEAM; i++) {
+        if (s->team[i].species != SAP2_SNAIL) {
+            continue;
+        }
+        const int8_t amount = (int8_t)s->team[i].level;
+        int targets[3];
+        const int n = sap2_nearest_ahead(s, i, 3, targets);
+        for (int t = 0; t < n; t++) {
+            s->team[targets[t]].attack = (int8_t)(s->team[targets[t]].attack + amount);
+            sap2_clamp_stats(&s->team[targets[t]]);
+        }
+    }
+}
+
+static inline void sap2_apply(SapSeat2 *s, int action, int turn, int pet_slots, int food_slots) {
+    const int was_ended = s->ended;
+
     if (action == SAP2_ACT_END_TURN) {
         s->ended = 1;
     } else if (action >= SAP2_ACT_BUY_PET_BASE &&
@@ -845,7 +991,7 @@ static inline void sap2_apply(SapSeat2 *s, int action, int pet_slots, int food_s
         sap2_combine(s, i, j);
     } else if (action == SAP2_ACT_REROLL) {
         s->gold = (int16_t)(s->gold - 1);
-        sap2_roll_shop(s, pet_slots, food_slots);
+        sap2_roll_shop(s, turn, pet_slots, food_slots);
     } else if (action >= SAP2_ACT_REPOSITION_BASE && action < SAP2_ACT_REPOSITION_BASE + 10) {
         int i, j;
         sap2_pair(action - SAP2_ACT_REPOSITION_BASE, &i, &j);
@@ -864,6 +1010,15 @@ static inline void sap2_apply(SapSeat2 *s, int action, int pet_slots, int food_s
         if (s->actions_taken >= SAP2_SHOP_ACTION_BUDGET) {
             s->ended = 1;
         }
+    }
+
+    /* Snail fires exactly once, at the tick this seat's own shop turn
+     * transitions to ended - whether that was an explicit END_TURN or (a
+     * detail sap2 alone has, not the real game) the action budget forcing
+     * it. Both represent "this seat's shop turn is over," which is the
+     * real trigger. */
+    if (!was_ended && s->ended) {
+        sap2_fire_end_turn(s);
     }
 }
 
@@ -954,10 +1109,25 @@ static inline void sap2_battle_insert_front(SapBattle2 *b, int side, uint8_t spe
     }
 }
 
+/* NOT implemented here, and deliberately so: Hedgehog's own Faint ability
+ * ("deal 2/4/6 damage to ALL pets", both sides, measured via
+ * policy-clash-re-tools' battle.py - a single Hedgehog's splash confirmed
+ * to scale 2/4/6 by level and to land on the enemy dummy in a controlled
+ * one-on-one). What blocks it isn't the damage - it's that splash damage
+ * can itself faint pets ANYWHERE on either board, including outside the
+ * front position every call site here assumes, and those faints need
+ * their own on-faint resolution (possibly cascading into another
+ * Hedgehog). That needs a real "resolve every pet currently at <=0 health,
+ * anywhere, recursively" pass, not a species case bolted onto a function
+ * whose only two call sites both assume idx 0. Hedgehog is fully buyable/
+ * sellable/combinable (shop parity is intact - see SAP2_BASE_ATK/HP and
+ * sap2_roll_shop), it just currently faints with no special effect, same
+ * documented-gap treatment as Spider below. */
 static inline void sap2_battle_resolve_faint(SapBattle2 *b, uint64_t *rng, int side, int idx) {
     const uint8_t species = b->species[side][idx];
     const uint8_t level = b->level[side][idx];
     const uint8_t perk = b->perk[side][idx];
+    const int enemy = side ^ 1;
 
     if (species == SAP2_ANT) {
         int friends[SAP2_TEAM];
@@ -984,6 +1154,47 @@ static inline void sap2_battle_resolve_faint(SapBattle2 *b, uint64_t *rng, int s
         sap2_battle_remove(b, side, idx);
         sap2_battle_insert_front(b, side, SAP2_CRICKET_TOKEN, level, level, level);
         return;
+    } else if (species == SAP2_FLAMINGO) {
+        /* "The 2 nearest friends behind" - measured via
+         * policy-clash-re-tools' ability dump: TriggerBeforeDeath/ThisDied,
+         * TargetsRelative(Behind, distance 2), +1/2/3 atk and hp (by
+         * level). In this front-only-fights model idx is always the
+         * fainting pet's own (compacted) position, so "behind" is simply
+         * idx+1, idx+2, bounded by however many are left. */
+        const int8_t amount = (int8_t)level;
+        for (int off = 1; off <= 2; off++) {
+            const int t = idx + off;
+            if (t >= b->count[side]) {
+                break;
+            }
+            b->attack[side][t] = (int8_t)(b->attack[side][t] + amount);
+            b->health[side][t] = (int8_t)(b->health[side][t] + amount);
+            if (b->attack[side][t] > SAP2_MAX_STATS) {
+                b->attack[side][t] = SAP2_MAX_STATS;
+            }
+            if (b->health[side][t] > SAP2_MAX_STATS) {
+                b->health[side][t] = SAP2_MAX_STATS;
+            }
+        }
+    } else if (species == SAP2_RAT) {
+        /* Summons `level` 1/1 Dirty Rats up front for the OPPONENT -
+         * measured via the ability dump (EffectSummonGlobal, ForEnemy=True,
+         * UpFront=True, FinePrint "Doesn't trigger any summon abilities" -
+         * already true here, since battle-phase code never calls
+         * sap2_fire_friend_summoned). The token's own stats are always
+         * 1/1 regardless of Rat's level; only the COUNT scales. */
+        for (int n = 0; n < level; n++) {
+            sap2_battle_insert_front(b, enemy, SAP2_DIRTY_RAT, 1, 1, 1);
+        }
+    } else if (species == SAP2_SPIDER) {
+        /* NOT implemented: Spider's Faint summons a random Tier-3 pet at
+         * 2/4/6-4/4/6... (2/2 L1, 4/4 L2, 6/6 L3) - measured via the
+         * ability dump (EffectSummon, WithTier=3, WithRollable=True). No
+         * Tier-3 roster exists yet (see docs/envs/sap-v2.md's rollout
+         * plan), so there is nothing to summon from; same documented-gap
+         * treatment as sap-v1's Fish level_1 row. Spider itself is fully
+         * buyable/sellable/combinable and just faints with no special
+         * effect until Tier 3 lands. */
     }
 
     if (perk == SAP2_PERK_HONEY) {
@@ -1006,6 +1217,40 @@ static inline void sap2_battle_resolve_faint(SapBattle2 *b, uint64_t *rng, int s
  * documented order), and every entry fires even if its owner is already
  * gone by the time its turn comes. */
 static inline void sap2_battle_start(SapBattle2 *b, uint64_t *rng) {
+    /* Crab: gain health equal to 25/50/75% (by level) of the most healthy
+     * OTHER friend's, rounded up - measured via the ability dump
+     * (EffectCopyStats, Health=True, Add=True, Rounding=Ceil) and a
+     * controlled one-on-one via policy-clash-re-tools' battle.py. Simpler
+     * than Mosquito: it never removes anyone, so there is no ordering
+     * question - every Crab reads a snapshot of health taken before ANY
+     * Crab's own bonus is added, so two Crabs on the same team don't see
+     * each other's boosted health as "most healthy friend." Ceil(h*L/4)
+     * with L in {1,2,3} covers all three percentages with one formula
+     * (25%, 50%, 75% are exactly L/4). */
+    for (int side = 0; side < 2; side++) {
+        int8_t snapshot[SAP2_TEAM];
+        for (int i = 0; i < b->count[side]; i++) {
+            snapshot[i] = b->health[side][i];
+        }
+        for (int i = 0; i < b->count[side]; i++) {
+            if (b->species[side][i] != SAP2_CRAB) {
+                continue;
+            }
+            int8_t most_healthy = 0;
+            for (int j = 0; j < b->count[side]; j++) {
+                if (j != i && snapshot[j] > most_healthy) {
+                    most_healthy = snapshot[j];
+                }
+            }
+            if (most_healthy <= 0) {
+                continue; /* no other friend to copy from */
+            }
+            int bonus = ((int)most_healthy * (int)b->level[side][i] + 3) / 4;
+            int health = (int)b->health[side][i] + bonus;
+            b->health[side][i] = (int8_t)(health > SAP2_MAX_STATS ? SAP2_MAX_STATS : health);
+        }
+    }
+
     /* Queue: one entry per Mosquito on the board when the battle starts. */
     int q_side[2 * SAP2_TEAM];
     int q_level[2 * SAP2_TEAM];
@@ -1153,11 +1398,53 @@ static inline int sap2_battle(SAP2 *env) {
     while (b.count[0] > 0 && b.count[1] > 0 && exchanges < SAP2_MAX_EXCHANGES) {
         exchanges++;
         const int8_t a0 = b.attack[0][0], a1 = b.attack[1][0];
-        b.health[0][0] = (int8_t)(b.health[0][0] - a1);
-        b.health[1][0] = (int8_t)(b.health[1][0] - a0);
+        /* Meat Bone: +3 hidden bonus damage on the attack, measured to
+         * NOT touch the displayed attack stat - see the perk's own
+         * comment by SAP2_PERK_MEATBONE. Read here, not folded into
+         * b.attack[][], so nothing else that reads attack (Kangaroo's
+         * trigger below, the observation) sees it. */
+        int8_t dmg_to_0 = a1, dmg_to_1 = a0;
+        if (b.perk[1][0] == SAP2_PERK_MEATBONE) {
+            dmg_to_0 = (int8_t)(dmg_to_0 + SAP2_MEATBONE_BONUS_DAMAGE);
+        }
+        if (b.perk[0][0] == SAP2_PERK_MEATBONE) {
+            dmg_to_1 = (int8_t)(dmg_to_1 + SAP2_MEATBONE_BONUS_DAMAGE);
+        }
+        b.health[0][0] = (int8_t)(b.health[0][0] - dmg_to_0);
+        b.health[1][0] = (int8_t)(b.health[1][0] - dmg_to_1);
 
         const int faint0 = b.health[0][0] <= 0;
         const int faint1 = b.health[1][0] <= 0;
+
+        /* Kangaroo ("friend ahead attacked") and Peacock ("this pet was
+         * hurt") both react to the attack that just happened, and take
+         * effect starting the NEXT exchange - this one's damage already
+         * used the old attack value. Position 1 is the only place a
+         * Kangaroo can ever have "a friend ahead" in this front-fights-
+         * front model: position 0 is whoever just attacked. Peacock
+         * reacts to its OWN position 0; a Peacock that just fainted has
+         * nothing left to buff, so that case is skipped (harmless either
+         * way - the pet is removed right after). Both measured via
+         * policy-clash-re-tools' ability dump (TriggerAttack / TriggerHurt,
+         * TriggerLimitType=All - unlimited, so this can fire every
+         * exchange a survivor is in). */
+        if (b.count[0] > 1 && b.species[0][1] == SAP2_KANGAROO) {
+            const int8_t lvl = (int8_t)b.level[0][1];
+            b.attack[0][1] = (int8_t)(b.attack[0][1] + lvl);
+            b.health[0][1] = (int8_t)(b.health[0][1] + lvl);
+        }
+        if (b.count[1] > 1 && b.species[1][1] == SAP2_KANGAROO) {
+            const int8_t lvl = (int8_t)b.level[1][1];
+            b.attack[1][1] = (int8_t)(b.attack[1][1] + lvl);
+            b.health[1][1] = (int8_t)(b.health[1][1] + lvl);
+        }
+        if (!faint0 && b.species[0][0] == SAP2_PEACOCK) {
+            b.attack[0][0] = (int8_t)(b.attack[0][0] + 3 * b.level[0][0]);
+        }
+        if (!faint1 && b.species[1][0] == SAP2_PEACOCK) {
+            b.attack[1][0] = (int8_t)(b.attack[1][0] + 3 * b.level[1][0]);
+        }
+
         if (!faint0 && !faint1) {
             continue;
         }
@@ -1185,12 +1472,53 @@ static inline int sap2_battle(SAP2 *env) {
     return -1;
 }
 
+/* Swan/Worm: TriggerStartTurn, measured via policy-clash-re-tools' ability
+ * dump. Swan gains 1/2/3 gold (by level); Worm stocks one food priced 2,
+ * whose SPECIES depends on Worm's own level - Apple-Discount at level 1,
+ * Apple2 ("Better Apple") at 2, Apple3 ("Best Apple") at 3, not the usual
+ * roll pool. Measured (policy-clash-re-tools' shop.py, end_turn then
+ * start_turn on a Worm-owning board): the stocked item PREPENDS, same
+ * slide-everything-right technique Pigeon's crumbs already use in
+ * sap2_sell, and comes in unfrozen (see that function's TurnOver comment -
+ * the same harness bug this was first measured through affected this
+ * reading too, before the fix).
+ *
+ * Fires once per seat at the START of a new round's shop phase, after
+ * that round's roll (so Worm's stock sits alongside whatever the roll
+ * produced, matching the measurement) - for every Swan/Worm already on
+ * the team, never one bought THIS round (it wasn't there when its own
+ * trigger fired) and never on round 1 (the team is always empty at
+ * sap2_reset). */
+static const uint8_t SAP2_WORM_STOCK[SAP2_MAX_LEVEL] = {SAP2_APPLE_DISCOUNT, SAP2_APPLE2, SAP2_APPLE3};
+
+static inline void sap2_fire_start_of_turn(SapSeat2 *s) {
+    for (int i = 0; i < SAP2_TEAM; i++) {
+        const uint8_t species = s->team[i].species;
+        if (species == SAP2_SWAN) {
+            s->gold = (int16_t)(s->gold + s->team[i].level);
+        } else if (species == SAP2_WORM) {
+            for (int f = SAP2_FOOD_SLOTS - 1; f >= 1; f--) {
+                s->shop_food[f] = s->shop_food[f - 1];
+            }
+            s->shop_food[0].species = SAP2_WORM_STOCK[s->team[i].level - 1];
+            s->shop_food[0].frozen = 0;
+        }
+    }
+}
+
 /* Applies this round's life/trophy changes, advances turn/round, and
  * either rolls the next round's shop (returns SAP2_ONGOING - the match
  * continues) or ends the match (returns a terminal status). See
  * docs/envs/sap-v2.md "Match rules". */
 static inline int sap2_resolve_round(SAP2 *env) {
     const int round_winner = sap2_battle(env); /* 0, 1, or -1 for a draw */
+
+    /* For Snail's shop-phase ability, which needs to know at the START of
+     * the NEXT round whether THIS one was lost - see sap2_fire_end_turn.
+     * A draw is not a loss (ConditionPreviousOutcome's WasPreviousOutcomeLost
+     * only fires on Outcome.EnemyWon, measured via the ability dump). */
+    env->seat[0].lost_last_round = (round_winner == 1);
+    env->seat[1].lost_last_round = (round_winner == 0);
 
     if (round_winner == 0) {
         env->seat[0].trophies++;
@@ -1263,7 +1591,8 @@ static inline int sap2_resolve_round(SAP2 *env) {
             s->team[t].temp_attack = 0;
             s->team[t].temp_health = 0;
         }
-        sap2_roll_shop(s, pet_slots, food_slots);
+        sap2_roll_shop(s, env->turn, pet_slots, food_slots);
+        sap2_fire_start_of_turn(s);
     }
     return SAP2_ONGOING;
 }
@@ -1287,8 +1616,8 @@ static inline void sap2_reset(SAP2 *env, uint64_t seed) {
 
     int pet_slots, food_slots;
     sap2_shop_size(env->turn, &pet_slots, &food_slots);
-    sap2_roll_shop(&env->seat[0], pet_slots, food_slots);
-    sap2_roll_shop(&env->seat[1], pet_slots, food_slots);
+    sap2_roll_shop(&env->seat[0], env->turn, pet_slots, food_slots);
+    sap2_roll_shop(&env->seat[1], env->turn, pet_slots, food_slots);
 }
 
 static inline int sap2_step(SAP2 *env, int action_0, int action_1) {
@@ -1327,7 +1656,7 @@ static inline int sap2_step(SAP2 *env, int action_0, int action_1) {
 
     for (int seat = 0; seat < 2; seat++) {
         if (!env->seat[seat].ended) {
-            sap2_apply(&env->seat[seat], actions[seat], pet_slots, food_slots);
+            sap2_apply(&env->seat[seat], actions[seat], env->turn, pet_slots, food_slots);
         }
     }
 
