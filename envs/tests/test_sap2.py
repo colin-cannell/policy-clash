@@ -457,11 +457,12 @@ def test_pigeon_stocks_free_bread_crumbs_without_evicting_food(env):
     pytest.fail("no seed in 200 offered a Pigeon in the turn-1 shop")
 
 
-def test_pigeon_crumbs_arrive_frozen_and_survive_one_roll_up_to_capacity(env):
-    """Measured: the crumbs a Pigeon stocks are FROZEN, which is what
-    carries them through the next roll - and a roll keeps frozen food only
-    up to the rolled capacity, dropping the rest. On turn 1 that capacity
-    is 1, so a level-3 Pigeon's three crumbs come back as exactly one."""
+def test_pigeon_crumbs_are_unfrozen_and_a_roll_clears_them(env):
+    """Measured on a turn-1 board: the crumbs a Pigeon stocks come in
+    UNFROZEN, so the next roll clears them along with any other unfrozen
+    stock past the rolled capacity. (On a turn-5 board the same sell
+    produced frozen crumbs - that inconsistency is an open question, see
+    docs/envs/sap-v2.md; sap2 follows the turn-1 reading.)"""
     for seed in range(200):
         probe = make(ENV_ID)
         result = probe.reset(seed=seed)
@@ -474,13 +475,13 @@ def test_pigeon_crumbs_arrive_frozen_and_survive_one_roll_up_to_capacity(env):
         result = probe.step(SELL_BASE + 0, seat1)
         f = result.observations[0].features
         assert shop_food_species(f, 0) == BREAD_CRUMBS_FOOD
-        assert shop_food_frozen(f, 0), "a stocked crumb is frozen"
+        assert not shop_food_frozen(f, 0), "a stocked crumb is not frozen"
         seat1 = IGNORED if result.observations[1] is None else END_TURN
         result = probe.step(REROLL, seat1)
         f = result.observations[0].features
-        # Capacity 1 on turn 1: the crumb survives, everything past it went.
-        assert shop_food_species(f, 0) == BREAD_CRUMBS_FOOD
-        assert shop_food_frozen(f, 0)
+        # Unfrozen, so the roll replaced it and cleared the stock past the
+        # turn-1 capacity of one.
+        assert shop_food_species(f, 0) != BREAD_CRUMBS_FOOD
         assert shop_food_species(f, 1) == 0
         return
     pytest.fail("no seed in 200 offered a Pigeon in the turn-1 shop")

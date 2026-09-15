@@ -370,18 +370,18 @@ static inline void sap2_roll_shop(SapSeat2 *s, int pet_slots, int food_slots) {
         s->shop_pets[i].frozen = 0;
     }
 
-    /* Food is truncated to the rolled capacity, frozen or not. Measured
-     * from the shipped build via policy-clash-re-tools: a food shop holding
-     * three frozen Bread Crumbs plus two rolled items came back from a roll
-     * as exactly two slots - the crumbs that fitted the capacity survived
-     * and the third was dropped, frozen flag and all. So a roll keeps the
-     * leftmost `food_slots` frozen items, fills whatever capacity is left
-     * with fresh offers, and clears everything past the capacity: the extra
-     * slots are this phase's Pigeon stock, not a permanent widening. */
+    /* Every frozen food item survives a roll, wherever it sits; the rolled
+     * capacity bounds only the REFILL. Measured from the shipped build via
+     * policy-clash-re-tools: a turn-1 shop (capacity 1) holding a frozen
+     * Apple plus two frozen crumbs came back from a roll with all three
+     * still frozen and in order, while a shop with one frozen crumb and an
+     * unfrozen Apple came back as just the crumb. Unfrozen stock past the
+     * capacity is cleared: those slots are this phase's Pigeon stock, not a
+     * permanent widening. */
     SapShopFood2 kept_food[SAP2_FOOD_SLOTS];
     int n_food = 0;
     for (int i = 0; i < SAP2_FOOD_SLOTS; i++) {
-        if (s->shop_food[i].frozen && n_food < food_slots) {
+        if (s->shop_food[i].frozen) {
             kept_food[n_food++] = s->shop_food[i];
         }
     }
@@ -685,21 +685,26 @@ static inline void sap2_sell(SapSeat2 *s, int slot) {
     case SAP2_PIGEON: {
         /* Measured from the shipped build via policy-clash-re-tools: the sell
          * stocks `level` Bread Crumbs at price 0, PREPENDS them - the food
-         * that was already rolled survives, pushed right - and stocks them
-         * FROZEN. The frozen flag is not cosmetic: it is what carries a
-         * crumb through the next roll, which keeps frozen items only up to
-         * the rolled capacity (see sap2_roll_shop). An L2 Pigeon sold into a
-         * turn-1 shop turns [Apple] into [Crumbs*, Crumbs*, Apple], and five
-         * level-1 Pigeons sold in one phase leave seven items, all of them
-         * buyable. SAP2_FOOD_SLOTS is sized for the worst case, so the
-         * prepend below can never push a real item off the end. */
+         * that was already rolled survives, pushed right. An L2 Pigeon sold
+         * into a turn-1 shop turns [Apple] into [Crumbs, Crumbs, Apple], and
+         * five level-1 Pigeons sold in one phase leave seven items, all of
+         * them buyable. SAP2_FOOD_SLOTS is sized for the worst case, so the
+         * prepend below can never push a real item off the end.
+         *
+         * OPEN: the crumbs come in UNFROZEN on a turn-1 board and FROZEN on
+         * a turn-5 board, measured both ways, and the effect definition
+         * (EffectAddShopSpell) carries no freeze flag - so something about
+         * the shop state decides it and has not been pinned down yet. sap2
+         * stocks them unfrozen, matching the turn-1 reading; a crumb that
+         * the player freezes by hand then behaves like any other frozen
+         * item. See docs/envs/sap-v2.md. */
         const int n = sold.level;
         for (int f = SAP2_FOOD_SLOTS - 1; f >= n; f--) {
             s->shop_food[f] = s->shop_food[f - n];
         }
         for (int f = 0; f < n; f++) {
             s->shop_food[f].species = SAP2_BREAD_CRUMBS;
-            s->shop_food[f].frozen = 1;
+            s->shop_food[f].frozen = 0;
         }
         break;
     }

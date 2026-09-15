@@ -60,12 +60,14 @@ Current state of that diff:
     food pool at Pack1 turn 1 is exactly Apple and Honey (measured over
     750 rolled slots, uniform), which sap2 matches; later turns roll
     higher-tier food sap2 does not have.
-  - The level-1→2 tier-up choice (pick one of two next-tier pets) has no
-    action, because with a Tier-1-only roster there is nothing to choose
-    from. It lands with Tier 2.
+  - The level-up reward has no counterpart: measured, when a team pet's
+    level rises the shipped build prepends two `Reward` pets from a higher
+    tier to the shop (price 3, over capacity; buying either clears both, as
+    does a roll). With a Tier-1-only roster there is no higher tier to
+    offer, so this lands with Tier 2.
 
-Twelve real divergences were found and fixed this way; they are called
-out where the rule is described below.
+Eleven real divergences were found and fixed this way, and one question
+is still open; they are called out where the rule is described below.
 
 ## A real correction, caught by the user mid-build, worth recording here
 
@@ -161,17 +163,19 @@ build phase driven through the game's own resolver — see
   at 0 and 1. sap2 used to leave frozen items where they sat, which kept
   the offers right but hid them behind different action indices than the
   real game uses.
-- **A roll truncates the food shop to the rolled capacity — divergence
-  #9, fixed.** Frozen is not an exemption: a food shop holding three
-  frozen Bread Crumbs plus two rolled items came back from a roll as
-  exactly two slots, the third crumb dropped with its frozen flag. So a
-  roll keeps the leftmost `food_slots` frozen items, fills the rest of the
-  capacity with fresh offers, and clears everything past it — the extra
-  slots are that phase's Pigeon stock, not a permanent widening.
-- **Pigeon's crumbs arrive frozen — divergence #10, fixed.** Measured:
-  immediately after the sell, every stocked crumb reads `frozen = true`.
-  That is not cosmetic, it is what carries a crumb through the next roll
-  under the rule above.
+- **A roll keeps every frozen food item; the capacity bounds only the
+  refill — divergence #9, fixed.** Measured: a turn-1 shop (capacity 1)
+  holding a frozen Apple plus two frozen crumbs came back from a roll with
+  all three still frozen and in order, and a shop with one frozen crumb
+  plus an unfrozen Apple came back as just the crumb. Unfrozen stock past
+  the capacity is cleared — those slots are that phase's Pigeon stock, not
+  a permanent widening.
+- **OPEN: when is a stocked crumb frozen?** The crumbs a Pigeon stocks
+  read `frozen = false` on a turn-1 board and `frozen = true` on a turn-5
+  board, measured both ways, and `EffectAddShopSpell` carries no freeze
+  flag — so something about the shop state decides it and has not been
+  pinned down. sap2 stocks them unfrozen, matching the turn-1 reading. A
+  crumb the player freezes by hand behaves like any other frozen item.
 - **Temporary buffs expire at the start of the next turn — divergence
   #11, fixed.** Only Horse's buff is temporary in this roster (its effect
   carries `Duration = Temp(1)`; Ant, Otter, Beaver, Duck and Fish all
