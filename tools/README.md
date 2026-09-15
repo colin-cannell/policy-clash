@@ -1,5 +1,13 @@
 # tools
 
+Everything here runs against the env itself. The harness that checks
+`sap2-v1` against the *shipped* Super Auto Pets binary deliberately does
+not live in this repo — it loads a commercial game's code and only runs
+on a machine that has it installed. It is in the `policy-clash-re-tools`
+repo, under `sap/`. The rules it established, and the divergences it
+caught, are recorded in `docs/envs/sap-v2.md`; nothing in this repo
+imports it.
+
 ## `visualize_sap2.py`
 
 A terminal visualizer for `sap2-v1` matches, driven by the real C engine

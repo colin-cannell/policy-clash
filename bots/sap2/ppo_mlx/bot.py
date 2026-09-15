@@ -21,9 +21,14 @@ from pathlib import Path
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
+from policyclash_envs.sap2 import NUM_ACTIONS, OBS_FLOATS
 
-OBS = 174
-ACTIONS = 49
+# Derived from the env, not pinned: sap2's observation and action layouts
+# changed when its rules were corrected against the shipped game (see
+# policy-clash-re-tools). A checkpoint trained before that no longer fits, and
+# silently reshaping it would produce a policy that plays noise.
+OBS = OBS_FLOATS
+ACTIONS = NUM_ACTIONS
 HIDDEN = 128
 
 WEIGHTS = Path(__file__).with_name("weights.safetensors")
@@ -46,7 +51,14 @@ class Bot:
     def __init__(self, seed: int) -> None:
         del seed  # the policy is deterministic
         self.model = ActorCritic()
-        self.model.load_weights(str(WEIGHTS))
+        try:
+            self.model.load_weights(str(WEIGHTS))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{WEIGHTS.name} does not fit the current sap2 layout "
+                f"(obs {OBS}, actions {ACTIONS}); retrain with "
+                "tools/train_ppo_sap2.py"
+            ) from exc
         mx.eval(self.model.parameters())
 
     def act(self, obs) -> int:
