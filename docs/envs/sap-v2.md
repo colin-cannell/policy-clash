@@ -66,8 +66,10 @@ Current state of that diff:
     does a roll). With a Tier-1-only roster there is no higher tier to
     offer, so this lands with Tier 2.
 
-Eleven real divergences were found and fixed this way, and one question
-is still open; they are called out where the rule is described below.
+Eleven real divergences were found and fixed this way; they are called
+out where the rule is described below. One apparent twelfth turned out to
+be an artifact of how the harness drives the engine - see Pigeon's crumbs
+under Match rules.
 
 ## A real correction, caught by the user mid-build, worth recording here
 
@@ -170,21 +172,27 @@ build phase driven through the game's own resolver — see
   plus an unfrozen Apple came back as just the crumb. Unfrozen stock past
   the capacity is cleared — those slots are that phase's Pigeon stock, not
   a permanent widening.
-- **OPEN: when is a stocked crumb frozen?** The crumbs a Pigeon stocks
-  read `frozen = false` on a turn-1 board and `frozen = true` on a turn-5
-  board, measured both ways, and `EffectAddShopSpell` carries no freeze
-  flag — so something about the shop state decides it and has not been
-  pinned down. sap2 stocks them unfrozen, matching the turn-1 reading. A
-  crumb the player freezes by hand behaves like any other frozen item.
+- **Pigeon's crumbs are stocked unfrozen**, and the "frozen on a turn-5
+  board" reading that briefly looked like a rule was an artifact of the
+  oracle, not the game: the flag keys off `BoardModel.TurnOver`, and the
+  harness's faked Ready→PreBuild handoff left `TurnOver` set, so every
+  board it advanced past turn 1 sat in a build phase no live game is ever
+  in. With `TurnOver` cleared the crumbs read unfrozen at every turn and
+  tier. A crumb the player freezes by hand behaves like any other frozen
+  item. Worth recording because it is the failure mode of measuring
+  against a driven engine rather than a played one.
 - **Temporary buffs expire at the start of the next turn — divergence
   #11, fixed.** Only Horse's buff is temporary in this roster (its effect
   carries `Duration = Temp(1)`; Ant, Otter, Beaver, Duck and Fish all
   carry `Perm(0)`). Measured: a Horse plus a freshly bought Ant showed the
   Ant at 3/2 on turn 1 and 2/2 from turn 2 on. The buff still counts for
   that round's battle. `SapPet2` now carries permanent and temporary
-  components, and a stack runs its `max` on the permanent ones while the
-  survivor keeps its live temporary buff — also measured: a buffed Ant
-  (3/2) stacked with a fresh Ant showed 4/3 that turn and 3/3 the next.
+  components. A stack runs its `max` on the permanent ones and takes the
+  **higher of the two temporary** components with no `+1`, so the buff
+  survives whichever copy carried it — measured against
+  `IntegerStat.Permanent`/`.Temporary` for all four combinations of buffed
+  target and buffed incoming copy. A buffed Ant (3/2) stacked with a fresh
+  Ant shows 4/3 that turn and 3/3 the next.
 - **A battle is capped at 71 exchanges — divergence #12, fixed.**
   Measured: two 0-attack pets trade for exactly 71 front-vs-front
   exchanges (142 `Attack` events, independent of team size and health) and
